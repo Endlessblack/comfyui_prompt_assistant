@@ -86,6 +86,37 @@ class LLMService:
         else:
             # 兼容旧版配置格式
             return config
+
+    @staticmethod
+    def _extract_valid_content(completion: ChatCompletion, provider_display_name: str) -> str:
+        """验证并提取模型返回的文本内容"""
+        if not isinstance(completion, ChatCompletion):
+            raise ValueError(f"{provider_display_name}返回无效响应")
+        if not getattr(completion, 'id', None) or not getattr(completion, 'model', None):
+            raise ValueError(f"{provider_display_name}返回结构不完整")
+        choices = getattr(completion, 'choices', None)
+        if not choices or len(choices) == 0:
+            raise ValueError(f"{provider_display_name}无可用结果")
+        choice = choices[0]
+        finish_reason = getattr(choice, 'finish_reason', None)
+        if finish_reason and finish_reason not in ('stop', 'length'):
+            raise ValueError(f"{provider_display_name}响应异常: finish_reason={finish_reason}")
+        message = getattr(choice, 'message', None)
+        if not message:
+            raise ValueError(f"{provider_display_name}响应缺少消息")
+        if getattr(message, 'refusal', None):
+            raise ValueError(f"{provider_display_name}拒绝提供内容")
+        if getattr(choice, 'blocked', False) or getattr(choice, 'blocked_reason', None):
+            raise ValueError(f"{provider_display_name}返回被阻止的内容")
+        if getattr(message, 'tool_calls', None) and not getattr(message, 'content', None):
+            raise ValueError(f"{provider_display_name}返回工具调用而无文本内容")
+        content = getattr(message, 'content', '')
+        if content is None:
+            raise ValueError(f"{provider_display_name}返回空结果")
+        content = content.strip()
+        if not content:
+            raise ValueError(f"{provider_display_name}返回空结果")
+        return content
     
     @staticmethod
     async def expand_prompt(prompt: str, request_id: Optional[str] = None, stream_callback: Optional[Callable[[str], None]] = None) -> Dict[str, Any]:
@@ -185,12 +216,11 @@ class LLMService:
 
                 if provider == 'gemini':
                     completion = await client.chat.completions.create(**request_kwargs)
-                    full_content = ""
-                    if completion.choices:
-                        message = completion.choices[0].message
-                        if message and getattr(message, "content", None):
-                            full_content = message.content
-                    if stream_callback and full_content:
+                    try:
+                        full_content = LLMService._extract_valid_content(completion, provider_display_name)
+                    except ValueError as e:
+                        return {"success": False, "error": str(e)}
+                    if stream_callback:
                         stream_callback(full_content)
                 else:
                     stream = await client.chat.completions.create(stream=True, response_format={"type": "text"}, **request_kwargs)
@@ -324,12 +354,11 @@ class LLMService:
 
                 if provider == 'gemini':
                     completion = await client.chat.completions.create(**request_kwargs)
-                    full_content = ""
-                    if completion.choices:
-                        message = completion.choices[0].message
-                        if message and getattr(message, "content", None):
-                            full_content = message.content
-                    if stream_callback and full_content:
+                    try:
+                        full_content = LLMService._extract_valid_content(completion, provider_display_name)
+                    except ValueError as e:
+                        return {"success": False, "error": str(e)}
+                    if stream_callback:
                         stream_callback(full_content)
                 else:
                     stream = await client.chat.completions.create(stream=True, response_format={"type": "text"}, **request_kwargs)
