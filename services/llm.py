@@ -174,26 +174,30 @@ class LLMService:
             try:
                 # 添加调试信息
                 print(f"{PREFIX} 调用LLM API | 服务:{provider_display_name} | 模型:{model}")
-                
-                # 使用配置中的参数
-                stream = await client.chat.completions.create(
-                    model=model,
-                    messages=[{"role": m["role"], "content": m["content"]} for m in messages],
-                    temperature=temperature,
-                    top_p=top_p,
-                    max_tokens=max_tokens,
-                    stream=True,
-                    # 添加响应格式参数，减少不必要的token
-                    response_format={"type": "text"}
-                )
-                
-                full_content = ""
-                async for chunk in stream:
-                    if chunk.choices[0].delta.content:
-                        content = chunk.choices[0].delta.content
-                        full_content += content
-                        if stream_callback:
-                            stream_callback(content)
+
+                request_kwargs = {
+                    "model": model,
+                    "messages": [{"role": m["role"], "content": m["content"]} for m in messages],
+                    "temperature": temperature,
+                    "top_p": top_p,
+                    "max_tokens": max_tokens,
+                }
+
+                if provider == 'gemini':
+                    completion = await client.chat.completions.create(**request_kwargs)
+                    full_content = completion.choices[0].message.content if completion.choices else ""
+                    if stream_callback and full_content:
+                        stream_callback(full_content)
+                else:
+                    stream = await client.chat.completions.create(stream=True, response_format={"type": "text"}, **request_kwargs)
+                    full_content = ""
+                    async for chunk in stream:
+                        if chunk.choices[0].delta.content:
+                            content = chunk.choices[0].delta.content
+                            full_content += content
+                            if stream_callback:
+                                stream_callback(content)
+
                 if not full_content.strip():
                     return {"success": False, "error": f"{provider_display_name}返回空结果"}
 
@@ -305,26 +309,30 @@ class LLMService:
             try:
                 # 添加调试信息
                 print(f"{PREFIX} 调用LLM API | 服务:{provider_display_name} | 模型:{model}")
-                
-                # 使用配置中的参数
-                stream = await client.chat.completions.create(
-                    model=model,
-                    messages=[{"role": m["role"], "content": m["content"]} for m in messages],
-                    temperature=temperature,
-                    top_p=top_p,
-                    max_tokens=max_tokens,
-                    stream=True,
-                    # 添加响应格式参数，减少不必要的token
-                    response_format={"type": "text"}
-                )
-                
-                full_content = ""
-                async for chunk in stream:
-                    if chunk.choices[0].delta.content:
-                        content = chunk.choices[0].delta.content
-                        full_content += content
-                        if stream_callback:
-                            stream_callback(content)
+
+                request_kwargs = {
+                    "model": model,
+                    "messages": [{"role": m["role"], "content": m["content"]} for m in messages],
+                    "temperature": temperature,
+                    "top_p": top_p,
+                    "max_tokens": max_tokens,
+                }
+
+                if provider == 'gemini':
+                    completion = await client.chat.completions.create(**request_kwargs)
+                    full_content = completion.choices[0].message.content if completion.choices else ""
+                    if stream_callback and full_content:
+                        stream_callback(full_content)
+                else:
+                    stream = await client.chat.completions.create(stream=True, response_format={"type": "text"}, **request_kwargs)
+                    full_content = ""
+                    async for chunk in stream:
+                        if chunk.choices[0].delta.content:
+                            content = chunk.choices[0].delta.content
+                            full_content += content
+                            if stream_callback:
+                                stream_callback(content)
+
                 if not full_content.strip():
                     return {"success": False, "error": f"{provider_display_name}返回空结果"}
 

@@ -243,32 +243,36 @@ class VisionService:
             try:
                 # 添加调试信息
                 print(f"{PREFIX} 调用视觉模型API | 服务:{provider_display_name} | 模型:{model}")
-                
-                # 使用配置中的参数
-                response = await client.chat.completions.create(
-                    model=model,
-                    messages=[{
+
+                request_kwargs = {
+                    "model": model,
+                    "messages": [{
                         "role": "user",
                         "content": [
                             {"type": "text", "text": system_prompt},
                             {"type": "image_url", "image_url": {"url": image_data}}
                         ]
                     }],
-                    max_tokens=max_tokens,
-                    temperature=temperature,
-                    top_p=top_p,
-                    stream=True,
-                    # 添加响应格式参数，减少不必要的token
-                    response_format={"type": "text"}
-                )
-                
-                full_content = ""
-                async for chunk in response:
-                    if chunk.choices[0].delta.content:
-                        content = chunk.choices[0].delta.content
-                        full_content += content
-                        if stream_callback:
-                            stream_callback(content)
+                    "max_tokens": max_tokens,
+                    "temperature": temperature,
+                    "top_p": top_p,
+                }
+
+                if provider == 'gemini':
+                    resp = await client.chat.completions.create(**request_kwargs)
+                    full_content = resp.choices[0].message.content if resp.choices else ""
+                    if stream_callback and full_content:
+                        stream_callback(full_content)
+                else:
+                    resp = await client.chat.completions.create(stream=True, response_format={"type": "text"}, **request_kwargs)
+                    full_content = ""
+                    async for chunk in resp:
+                        if chunk.choices[0].delta.content:
+                            content = chunk.choices[0].delta.content
+                            full_content += content
+                            if stream_callback:
+                                stream_callback(content)
+
                 if not full_content.strip():
                     return {"success": False, "error": f"{provider_display_name}返回空结果"}
 

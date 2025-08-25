@@ -48,7 +48,7 @@ class ConfigManager:
                         "top_p": 0.9
                     },
                     "gemini": {
-                        "model": "gemini-1.5-pro",
+                        "model": "gemini-2.5-flash",
                         "base_url": "https://generativelanguage.googleapis.com/v1beta",
                         "api_key": "",
                         "temperature": 0.7,
