@@ -162,6 +162,10 @@ class VisionService:
     @staticmethod
     async def _extract_with_retry(client, request_kwargs: Dict[str, Any], provider: str, provider_display_name: str):
         resp = await client.chat.completions.create(**request_kwargs)
+        if provider == 'gemini':
+            from ..server import PREFIX
+            raw = resp.model_dump_json()
+            print(f"{PREFIX} [Gemini] raw_response: {VisionService._redact_api_key(raw)}")
         try:
             content = VisionService._extract_valid_content(resp, provider_display_name)
         except ValueError as e:
@@ -171,6 +175,8 @@ class VisionService:
                 retry_kwargs['temperature'] = 0.3
                 retry_kwargs['top_p'] = 1.0
                 resp = await client.chat.completions.create(**retry_kwargs)
+                raw_retry = resp.model_dump_json()
+                print(f"{PREFIX} [Gemini] raw_response_retry: {VisionService._redact_api_key(raw_retry)}")
                 content = VisionService._extract_valid_content(resp, provider_display_name)
             else:
                 raise
@@ -355,6 +361,8 @@ class VisionService:
                 finish = None
                 first_logged = False
                 async for chunk in resp:
+                    if provider == 'gemini':
+                        print(f"{PREFIX} [Gemini|stream] raw_chunk: {VisionService._redact_api_key(chunk.model_dump_json())}")
                     choice0 = chunk.choices[0]
                     delta = getattr(choice0, "delta", None)
                     finish = getattr(choice0, "finish_reason", finish)
