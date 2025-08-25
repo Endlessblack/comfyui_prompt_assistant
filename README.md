@@ -1,4 +1,5 @@
-
+修改自https://github.com/yawiii/comfyui_prompt_assistant
+增加了google 語言模型與翻譯
 
 
 # ComfyUI Prompt Assistant✨提示词小助手
@@ -144,6 +145,7 @@ Cereza69、LAOGOU-666、H、小海、foryoung365、xu...
 #### 填入App id 、密钥、大模型API key
 
 ![设置](https://github.com/user-attachments/assets/d30d7c34-b6c6-4627-a554-ef7eee2f9cfb)
+
 
 
 
