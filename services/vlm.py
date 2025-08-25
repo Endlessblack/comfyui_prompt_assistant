@@ -5,6 +5,7 @@ from io import BytesIO
 from PIL import Image
 from typing import Optional, Dict, Any, List, Callable
 import asyncio
+import re
 from openai import AsyncOpenAI
 from openai.types.chat import ChatCompletion
 import httpx
@@ -42,7 +43,8 @@ class VisionService:
         if provider == 'gemini':
             http_client = httpx.AsyncClient(
                 timeout=httpx.Timeout(30.0),
-                params={"key": api_key}
+                params={"key": api_key},
+                headers={"x-goog-api-key": api_key}
             )
         else:
             http_client = httpx.AsyncClient(
@@ -91,6 +93,12 @@ class VisionService:
             return config
 
     @staticmethod
+    def _redact_api_key(text: str) -> str:
+        if not isinstance(text, str):
+            return text
+        return re.sub(r'(?<=\?key=)[^&]+', '***redacted***', text)
+
+    @staticmethod
     def _extract_valid_content(completion: ChatCompletion, provider_display_name: str) -> str:
         """验证并提取视觉模型返回的文本内容"""
         if not isinstance(completion, ChatCompletion):
@@ -101,9 +109,6 @@ class VisionService:
         if not choices or len(choices) == 0:
             raise ValueError(f"{provider_display_name}无可用结果")
         choice = choices[0]
-        finish_reason = getattr(choice, 'finish_reason', None)
-        if finish_reason and finish_reason not in ('stop', 'length'):
-            raise ValueError(f"{provider_display_name}响应异常: finish_reason={finish_reason}")
         message = getattr(choice, 'message', None)
         if not message:
             raise ValueError(f"{provider_display_name}响应缺少消息")
@@ -111,23 +116,65 @@ class VisionService:
             raise ValueError(f"{provider_display_name}拒绝提供内容")
         if getattr(choice, 'blocked', False) or getattr(choice, 'blocked_reason', None):
             raise ValueError(f"{provider_display_name}返回被阻止的内容")
-        if getattr(message, 'tool_calls', None) and not getattr(message, 'content', None):
-            raise ValueError(f"{provider_display_name}返回工具调用而无文本内容")
-        content = getattr(message, 'content', '')
-        if content is None:
-            raise ValueError(f"{provider_display_name}返回空结果")
-        # Gemini可能返回内容片段数组，需要合并
-        if isinstance(content, list):
-            content = "".join(
-                part.get("text", "") if isinstance(part, dict) else str(part)
-                for part in content
-            )
-        if not isinstance(content, str):
-            raise ValueError(f"{provider_display_name}返回空结果")
-        content = content.strip()
-        if not content:
-            raise ValueError(f"{provider_display_name}返回空结果")
-        return content
+        content = getattr(message, 'content', None)
+        text = ""
+        if isinstance(content, str):
+            text = content.strip()
+        elif isinstance(content, list):
+            buf: List[str] = []
+            for part in content:
+                if isinstance(part, dict):
+                    t = part.get("text") or ""
+                    if isinstance(t, str) and t.strip():
+                        buf.append(t.strip())
+                elif isinstance(part, str):
+                    if part.strip():
+                        buf.append(part.strip())
+            text = "".join(buf).strip()
+
+        def _search(obj: Any) -> Optional[str]:
+            if isinstance(obj, dict):
+                for key in ["text", "output_text", "value"]:
+                    val = obj.get(key)
+                    if isinstance(val, str) and val.strip():
+                        return val.strip()
+                for v in obj.values():
+                    found = _search(v)
+                    if found:
+                        return found
+            elif isinstance(obj, list):
+                for item in obj:
+                    found = _search(item)
+                    if found:
+                        return found
+            elif isinstance(obj, str) and obj.strip():
+                return obj.strip()
+            return None
+
+        if not text:
+            raw = completion.model_dump()
+            text = _search(raw)
+
+        if text:
+            return text.strip()
+        raise ValueError(f"{provider_display_name}返回空结果")
+
+    @staticmethod
+    async def _extract_with_retry(client, request_kwargs: Dict[str, Any], provider: str, provider_display_name: str):
+        resp = await client.chat.completions.create(**request_kwargs)
+        try:
+            content = VisionService._extract_valid_content(resp, provider_display_name)
+        except ValueError as e:
+            if provider == 'gemini' and '空结果' in str(e):
+                retry_kwargs = dict(request_kwargs)
+                retry_kwargs.pop('response_format', None)
+                retry_kwargs['temperature'] = 0.3
+                retry_kwargs['top_p'] = 1.0
+                resp = await client.chat.completions.create(**retry_kwargs)
+                content = VisionService._extract_valid_content(resp, provider_display_name)
+            else:
+                raise
+        return content, resp
 
     @staticmethod
     def preprocess_image(image_data: str, request_id: Optional[str] = None) -> str:
@@ -297,8 +344,10 @@ class VisionService:
                     "max_tokens": max_tokens,
                     "temperature": temperature,
                     "top_p": top_p,
-                    "response_format": {"type": "text"},
+                    "tool_choice": "none",
                 }
+                if provider != 'gemini':
+                    request_kwargs["response_format"] = {"type": "text"}
 
                 request_kwargs["stream"] = True
                 resp = await client.chat.completions.create(**request_kwargs)
@@ -333,12 +382,12 @@ class VisionService:
                     if not full_content:
                         req2 = dict(request_kwargs)
                         req2["stream"] = False
-                        resp2 = await client.chat.completions.create(**req2)
                         try:
-                            full_content = VisionService._extract_valid_content(resp2, provider_display_name)
+                            full_content, resp2 = await VisionService._extract_with_retry(client, req2, provider, provider_display_name)
                         except ValueError:
                             full_content = ""
-                        finish = getattr(resp2.choices[0], "finish_reason", finish)
+                            resp2 = None
+                        finish = getattr(resp2.choices[0], "finish_reason", finish) if resp2 else finish
                         print(f"{PREFIX} [Gemini|stream] fallback non-stream used len={len(full_content)}")
                     if finish == "length" or not full_content:
                         for k in range(3):
@@ -354,15 +403,17 @@ class VisionService:
                                 "temperature": temperature,
                                 "top_p": top_p,
                                 "max_tokens": tmp_max_tokens,
-                                "response_format": {"type": "text"},
                                 "stream": False,
+                                "tool_choice": "none",
                             }
-                            resp3 = await client.chat.completions.create(**req3)
+                            if provider != 'gemini':
+                                req3["response_format"] = {"type": "text"}
                             try:
-                                addition = VisionService._extract_valid_content(resp3, provider_display_name)
+                                addition, resp3 = await VisionService._extract_with_retry(client, req3, provider, provider_display_name)
                             except ValueError:
                                 addition = ""
-                            finish = getattr(resp3.choices[0], "finish_reason", finish)
+                                resp3 = None
+                            finish = getattr(resp3.choices[0], "finish_reason", finish) if resp3 else finish
                             if addition:
                                 full_content += addition
                             print(f"{PREFIX} auto-continue#{k+1} finish={finish} len={len(full_content)}")
@@ -389,11 +440,52 @@ class VisionService:
                 print(f"{PREFIX} 视觉模型分析任务在服务层被取消 | ID:{request_id}")
                 return {"success": False, "error": "请求已取消", "cancelled": True}
             except Exception as e:
-                return {"success": False, "error": format_api_error(e, provider_display_name)}
+                err = VisionService._redact_api_key(format_api_error(e, provider_display_name))
+                return {"success": False, "error": err}
                 
         except asyncio.CancelledError:
             print(f"{PREFIX} 视觉分析任务在服务层被取消 | ID:{request_id}")
             return {"success": False, "error": "请求已取消", "cancelled": True}
         except Exception as e:
             print(f"{ERROR_PREFIX} 视觉分析过程异常 | 错误:{str(e)}")
-            return {"success": False, "error": str(e)}
+            return {"success": False, "error": VisionService._redact_api_key(str(e))}
+
+
+if __name__ == "__main__":
+    from openai.types.chat import ChatCompletion
+    import asyncio
+
+    def _make(data):
+        base = {"id": "test", "model": "gpt"}
+        base.update(data)
+        return ChatCompletion.model_validate(base)
+
+    case_a = {"choices":[{"message":{"role":"assistant","content":None},"finish_reason":"stop"}],"parts":[{"text":"Recovered"}]}
+    assert VisionService._extract_valid_content(_make(case_a), "Gemini") == "Recovered"
+
+    case_b = {"choices":[{"message":{"role":"assistant","content":[{"type":"text","text":"Hello"},{"type":"text","text":" world"}]},"finish_reason":"stop"}]}
+    assert VisionService._extract_valid_content(_make(case_b), "Gemini") == "Hello world"
+
+    case_c = {"choices":[{"message":{"role":"assistant","tool_calls":[{}]},"finish_reason":"stop"}],"parts":[{"text":"From parts"}]}
+    assert VisionService._extract_valid_content(_make(case_c), "Gemini") == "From parts"
+
+    empty_resp = {"choices":[{"message":{"role":"assistant","content":None},"finish_reason":"stop"}]}
+    good_resp = {"choices":[{"message":{"role":"assistant","content":"Retry ok"},"finish_reason":"stop"}]}
+
+    class DummyClient:
+        def __init__(self):
+            self.calls = 0
+            self.chat = type("obj", (), {"completions": type("obj", (), {"create": self.create})()})
+
+        async def create(self, **kwargs):
+            self.calls += 1
+            data = empty_resp if self.calls == 1 else good_resp
+            return _make(data)
+
+    async def _test_retry():
+        content, _ = await VisionService._extract_with_retry(DummyClient(), {"model": "m"}, "gemini", "Gemini")
+        assert content == "Retry ok"
+
+    asyncio.run(_test_retry())
+    print("self-test passed")
+
