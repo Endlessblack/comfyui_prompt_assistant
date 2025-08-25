@@ -34,24 +34,26 @@ class CloudTranslateService:
         return chunks
 
     @staticmethod
-    async def translate_chunk(session: aiohttp.ClientSession, chunk: str, api_key: str, from_lang: str, to_lang: str):
-        url = 'https://translation.googleapis.com/language/translate/v2'
+    async def translate_chunk(session: aiohttp.ClientSession, chunk: str, api_key: str, project_id: str, location: str, from_lang: str, to_lang: str):
+        url = f'https://translation.googleapis.com/v3/projects/{project_id}/locations/{location}:translateText'
         params = {
-            'q': chunk,
-            'target': to_lang,
-            'format': 'text',
             'key': api_key
         }
+        body: Dict[str, Any] = {
+            'contents': [chunk],
+            'targetLanguageCode': to_lang,
+            'mimeType': 'text/plain'
+        }
         if from_lang != 'auto':
-            params['source'] = from_lang
-        async with session.post(url, data=params, timeout=10) as resp:
+            body['sourceLanguageCode'] = from_lang
+        async with session.post(url, params=params, json=body, timeout=10) as resp:
             if resp.status != 200:
                 raise Exception(f"Cloud: HTTP请求失败，状态码: {resp.status}")
             data = await resp.json()
             if 'error' in data:
                 message = data['error'].get('message', '未知错误')
                 raise Exception(f"Cloud: {message}")
-            translations = data.get('data', {}).get('translations', [])
+            translations = data.get('translations', [])
             translated_parts = [t.get('translatedText', '') for t in translations]
             translated_text = '\n'.join(translated_parts).strip()
             if not translated_text:
@@ -64,8 +66,10 @@ class CloudTranslateService:
             from ..config_manager import config_manager
             config = config_manager.get_cloud_translate_config()
             api_key = config.get('api_key')
-            if not api_key:
-                return {"success": False, "error": "Cloud: 请先配置Cloud Translate API密钥"}
+            project_id = config.get('project_id')
+            location = config.get('location') or 'global'
+            if not api_key or not project_id:
+                return {"success": False, "error": "Cloud: 请先配置Cloud Translate API密钥和项目ID"}
 
             request_id = request_id or f"cloud_trans_{int(time.time())}_{random.randint(1000, 9999)}"
             from ..server import PREFIX, AUTO_TRANSLATE_PREFIX
@@ -78,7 +82,7 @@ class CloudTranslateService:
             translated_parts = []
             async with aiohttp.ClientSession(trust_env=False) as session:
                 for chunk in chunks:
-                    translated = await CloudTranslateService.translate_chunk(session, chunk, api_key, from_lang, to_lang)
+                    translated = await CloudTranslateService.translate_chunk(session, chunk, api_key, project_id, location, from_lang, to_lang)
                     translated_parts.append(translated)
                     if len(chunks) > 1:
                         await asyncio.sleep(1)

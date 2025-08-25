@@ -24,7 +24,9 @@ class ConfigManager:
                 "secret_key": ""
             },
             "cloud_translate": {
-                "api_key": ""
+                "api_key": "",
+                "project_id": "",
+                "location": "global"
             },
             "llm": {
                 "current_provider": "zhipu",
@@ -402,7 +404,7 @@ class ConfigManager:
 
         return self.save_config(config)
 
-    def update_cloud_translate_config(self, api_key=None):
+    def update_cloud_translate_config(self, api_key=None, project_id=None, location=None):
         """更新Cloud翻译配置"""
         config = self.load_config()
         if "cloud_translate" not in config:
@@ -410,6 +412,10 @@ class ConfigManager:
 
         if api_key is not None:
             config["cloud_translate"]["api_key"] = api_key
+        if project_id is not None:
+            config["cloud_translate"]["project_id"] = project_id
+        if location is not None:
+            config["cloud_translate"]["location"] = location
 
         return self.save_config(config)
     

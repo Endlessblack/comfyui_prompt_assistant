@@ -21,6 +21,8 @@ class APIConfigManager {
         this.llmApiKey = null;
         this.llmBaseUrl = null;
         this.cloudApiKey = null;
+        this.cloudProjectId = null;
+        this.cloudLocation = null;
         this.visionModel = null;
         this.visionApiKey = null;
         this.visionBaseUrl = null;
@@ -68,6 +70,8 @@ class APIConfigManager {
                         // 处理 Cloud 翻译配置
                         const cloudConfig = {
                             api_key: controls.cloud.apiKey.value.trim(),
+                            project_id: controls.cloud.projectId.value.trim(),
+                            location: controls.cloud.location.value.trim(),
                         };
 
                         // 获取配置值
@@ -258,11 +262,20 @@ class APIConfigManager {
             { text: 'Cloud Translate API 申请', url: 'https://cloud.google.com/translate' }
         ]);
         const cloudApiKey = createInputGroup('', '请输入Cloud Translate API Key');
-        const cloudGroup = createHorizontalFormGroup([
+        const cloudProjectId = createInputGroup('', '请输入Google Cloud项目ID');
+        const cloudLocation = createInputGroup('', '例如: global 或 us-central1');
+        const cloudKeyGroup = createHorizontalFormGroup([
             { label: 'API Key', element: cloudApiKey.input }
         ]);
-        cloudSection.appendChild(cloudGroup);
+        const cloudInfoGroup = createHorizontalFormGroup([
+            { label: '项目ID', element: cloudProjectId.input },
+            { label: '位置', element: cloudLocation.input }
+        ]);
+        cloudSection.appendChild(cloudKeyGroup);
+        cloudSection.appendChild(cloudInfoGroup);
         this.cloudApiKey = cloudApiKey.input;
+        this.cloudProjectId = cloudProjectId.input;
+        this.cloudLocation = cloudLocation.input;
         return cloudSection;
     }
 
@@ -612,8 +625,14 @@ class APIConfigManager {
                 fetch('/prompt_assistant/api/config/vision').then(r => r.json())
             ]);
 
-                        if (cloudConfig.api_key) {
+            if (cloudConfig.api_key) {
                 this.cloudApiKey.value = cloudConfig.api_key;
+            }
+            if (cloudConfig.project_id) {
+                this.cloudProjectId.value = cloudConfig.project_id;
+            }
+            if (cloudConfig.location) {
+                this.cloudLocation.value = cloudConfig.location;
             }
 
             // 设置百度翻译配置
@@ -703,7 +722,7 @@ class APIConfigManager {
             // 将表单控件暴露给保存回调
             container.formControls = {
                 baidu: { appId: this.baiduAppId, secret: this.baiduSecret },
-                cloud: { apiKey: this.cloudApiKey },
+                cloud: { apiKey: this.cloudApiKey, projectId: this.cloudProjectId, location: this.cloudLocation },
                 llm: {
                     provider: this.llmProvider,
                     temperature: this.llmTemperature,
