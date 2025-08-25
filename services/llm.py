@@ -113,6 +113,14 @@ class LLMService:
         content = getattr(message, 'content', '')
         if content is None:
             raise ValueError(f"{provider_display_name}返回空结果")
+        # Gemini可能返回内容片段数组，需要合并
+        if isinstance(content, list):
+            content = "".join(
+                part.get("text", "") if isinstance(part, dict) else str(part)
+                for part in content
+            )
+        if not isinstance(content, str):
+            raise ValueError(f"{provider_display_name}返回空结果")
         content = content.strip()
         if not content:
             raise ValueError(f"{provider_display_name}返回空结果")
@@ -215,6 +223,7 @@ class LLMService:
                 }
 
                 if provider == 'gemini':
+                    request_kwargs["response_format"] = {"type": "text"}
                     completion = await client.chat.completions.create(**request_kwargs)
                     try:
                         full_content = LLMService._extract_valid_content(completion, provider_display_name)
@@ -353,6 +362,7 @@ class LLMService:
                 }
 
                 if provider == 'gemini':
+                    request_kwargs["response_format"] = {"type": "text"}
                     completion = await client.chat.completions.create(**request_kwargs)
                     try:
                         full_content = LLMService._extract_valid_content(completion, provider_display_name)

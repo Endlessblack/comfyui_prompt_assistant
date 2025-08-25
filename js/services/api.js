@@ -5,6 +5,19 @@
 
 import { logger } from '../utils/logger.js';
 
+// 通过配置文件指定API基础URL，无法从window.location检测时使用
+const configUrl = new URL('../../api_config.json', import.meta.url);
+let apiBaseUrl = window.location.origin;
+fetch(configUrl)
+    .then(r => (r.ok ? r.json() : null))
+    .then(cfg => {
+        if (cfg && cfg.base_url) {
+            apiBaseUrl = cfg.base_url.replace(/\/$/, '');
+            logger.debug(`使用配置API Base: ${apiBaseUrl}`);
+        }
+    })
+    .catch(() => {});
+
 // 用于存储进行中的请求的AbortController
 const runningRequests = new Map();
 
@@ -13,8 +26,7 @@ class APIService {
      * 构建完整的API URL
      */
     static getApiUrl(path) {
-        // 获取当前域名和端口
-        const baseUrl = window.location.origin;
+        const baseUrl = apiBaseUrl;
         // 确保路径格式正确
         const formattedPath = path.startsWith('/') ? path : `/${path}`;
         const url = `${baseUrl}${formattedPath}`;
