@@ -14,6 +14,7 @@ class VisionService:
         'openai': None,  # 使用默认
         'siliconflow': 'https://api.siliconflow.cn/v1',
         'zhipu': 'https://open.bigmodel.cn/api/paas/v4',
+        'gemini': 'https://generativelanguage.googleapis.com/v1beta/openai',
         'custom': None  # 使用配置中的自定义URL
     }
 
@@ -37,9 +38,15 @@ class VisionService:
         
         # 创建简化的httpx客户端，不使用HTTP/2，避免额外依赖
         # 视觉模型需要较长的超时时间
-        http_client = httpx.AsyncClient(
-            timeout=httpx.Timeout(30.0)  # 视觉模型需要更长的超时时间
-        )
+        if provider == 'gemini':
+            http_client = httpx.AsyncClient(
+                timeout=httpx.Timeout(30.0),
+                params={"key": api_key}
+            )
+        else:
+            http_client = httpx.AsyncClient(
+                timeout=httpx.Timeout(30.0)  # 视觉模型需要更长的超时时间
+            )
         
         kwargs = {
             "api_key": api_key,
@@ -219,6 +226,7 @@ class VisionService:
                 'zhipu': '智谱',
                 'siliconflow': '硅基流动',
                 'openai': 'OpenAI',
+                'gemini': 'Gemini',
                 'custom': '自定义'
             }.get(provider, provider)
             
@@ -282,4 +290,4 @@ class VisionService:
             return {"success": False, "error": "请求已取消", "cancelled": True}
         except Exception as e:
             print(f"{ERROR_PREFIX} 视觉分析过程异常 | 错误:{str(e)}")
-            return {"success": False, "error": str(e)} 
+            return {"success": False, "error": str(e)}

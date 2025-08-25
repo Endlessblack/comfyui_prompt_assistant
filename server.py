@@ -312,7 +312,7 @@ async def update_llm_config(request):
         if providers:
             # 逐个更新各提供商的配置
             for provider, provider_config in providers.items():
-                if provider not in ['zhipu', 'siliconflow', 'custom']:
+                if provider not in ['zhipu', 'siliconflow', 'gemini', 'custom']:
                     continue
                     
                 model = provider_config.get('model')
@@ -371,7 +371,7 @@ async def update_vision_config(request):
         if providers:
             # 逐个更新各提供商的配置
             for provider, provider_config in providers.items():
-                if provider not in ['zhipu', 'siliconflow', 'custom']:
+                if provider not in ['zhipu', 'siliconflow', 'gemini', 'custom']:
                     continue
                     
                 model = provider_config.get('model')

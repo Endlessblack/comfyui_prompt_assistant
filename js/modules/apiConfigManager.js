@@ -105,9 +105,11 @@ class APIConfigManager {
                             if (!config.vision.providers[provider]) {
                                 config.vision.providers[provider] = {
                                     model: provider === "zhipu" ? "glm-4v-flash" :
-                                        (provider === "siliconflow" ? "THUDM/GLM-4.1V-9B-Thinking" : ""),
+                                        (provider === "siliconflow" ? "THUDM/GLM-4.1V-9B-Thinking" :
+                                            (provider === "gemini" ? "gemini-2.5-flash" : "")),
                                     base_url: provider === "zhipu" ? "https://open.bigmodel.cn/api/paas/v4/chat/completions" :
-                                        (provider === "siliconflow" ? "https://api.siliconflow.cn/v1/chat/completions" : ""),
+                                        (provider === "siliconflow" ? "https://api.siliconflow.cn/v1/chat/completions" :
+                                            (provider === "gemini" ? "https://generativelanguage.googleapis.com/v1beta/chat/completions" : "")),
                                     api_key: "",
                                     temperature: 0.7,
                                     max_tokens: 2000,
@@ -425,6 +427,7 @@ class APIConfigManager {
         const visionProvider = createSelectGroup('', [
             { value: 'zhipu', text: '智谱' },
             { value: 'siliconflow', text: '硅基流动' },
+            { value: 'gemini', text: 'Gemini' },
             { value: 'custom', text: '自定义' }
         ]);
         const visionModelInput = createInputGroup('', '请输入模型名称');
@@ -533,6 +536,8 @@ class APIConfigManager {
                     this.visionModel.value = 'glm-4v-flash';
                 } else if (provider === 'siliconflow') {
                     this.visionModel.value = 'THUDM/GLM-4.1V-9B-Thinking';
+                } else if (provider === 'gemini') {
+                    this.visionModel.value = 'gemini-2.5-flash';
                 } else {
                     this.visionModel.value = '';
                 }

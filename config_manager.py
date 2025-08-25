@@ -82,6 +82,14 @@ class ConfigManager:
                         "max_tokens": 500,
                         "top_p": 0.9
                     },
+                    "gemini": {
+                        "model": "gemini-2.5-flash",
+                        "base_url": "https://generativelanguage.googleapis.com/v1beta",
+                        "api_key": "",
+                        "temperature": 0.7,
+                        "max_tokens": 500,
+                        "top_p": 0.9
+                    },
                     "custom": {
                         "model": "",
                         "base_url": "",
