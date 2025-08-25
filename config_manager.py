@@ -23,6 +23,9 @@ class ConfigManager:
                 "app_id": "",
                 "secret_key": ""
             },
+            "cloud_translate": {
+                "api_key": ""
+            },
             "llm": {
                 "current_provider": "zhipu",
                 "providers": {
@@ -37,6 +40,14 @@ class ConfigManager:
                     "siliconflow": {
                         "model": "Qwen/Qwen2.5-7B-Instruct",
                         "base_url": "https://api.siliconflow.cn/v1",
+                        "api_key": "",
+                        "temperature": 0.7,
+                        "max_tokens": 1000,
+                        "top_p": 0.9
+                    },
+                    "gemini": {
+                        "model": "gemini-1.5-pro",
+                        "base_url": "https://generativelanguage.googleapis.com/v1beta",
                         "api_key": "",
                         "temperature": 0.7,
                         "max_tokens": 1000,
@@ -323,6 +334,11 @@ class ConfigManager:
         """获取百度翻译配置"""
         config = self.load_config()
         return config.get("baidu_translate", self.default_config["baidu_translate"])
+
+    def get_cloud_translate_config(self):
+        """获取Cloud翻译配置"""
+        config = self.load_config()
+        return config.get("cloud_translate", self.default_config["cloud_translate"])
     
     def get_llm_config(self):
         """获取LLM配置"""
@@ -375,7 +391,18 @@ class ConfigManager:
             config["baidu_translate"]["app_id"] = app_id
         if secret_key is not None:
             config["baidu_translate"]["secret_key"] = secret_key
-            
+
+        return self.save_config(config)
+
+    def update_cloud_translate_config(self, api_key=None):
+        """更新Cloud翻译配置"""
+        config = self.load_config()
+        if "cloud_translate" not in config:
+            config["cloud_translate"] = {}
+
+        if api_key is not None:
+            config["cloud_translate"]["api_key"] = api_key
+
         return self.save_config(config)
     
     def update_llm_config(self, provider=None, model=None, base_url=None, api_key=None, temperature=None, max_tokens=None, top_p=None, update_current=True):

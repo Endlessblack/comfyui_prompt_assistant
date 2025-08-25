@@ -2,6 +2,7 @@ from aiohttp import web
 from server import PromptServer
 from .config_manager import config_manager
 from .services.baidu import BaiduTranslateService
+from .services.cloud import CloudTranslateService
 from .services.llm import LLMService
 from .services.vlm import VisionService
 import base64
@@ -58,6 +59,12 @@ def get_result_text(result):
 async def get_baidu_translate_config(request):
     """获取百度翻译配置"""
     config = config_manager.get_baidu_translate_config()
+    return web.json_response(config)
+
+@PromptServer.instance.routes.get(f'{API_PREFIX}/config/cloud_translate')
+async def get_cloud_translate_config(request):
+    """获取Cloud翻译配置"""
+    config = config_manager.get_cloud_translate_config()
     return web.json_response(config)
 
 @PromptServer.instance.routes.get(f'{API_PREFIX}/config/llm')
@@ -182,6 +189,24 @@ async def update_baidu_translate_config(request):
             return web.json_response({'error': '配置更新失败'}, status=500)
     except Exception as e:
         print(f"{ERROR_PREFIX} 百度翻译配置更新异常 | 错误:{str(e)}")
+        return web.json_response({'error': str(e)}, status=500)
+
+@PromptServer.instance.routes.post(f'{API_PREFIX}/config/cloud_translate')
+async def update_cloud_translate_config(request):
+    """更新Cloud翻译配置"""
+    try:
+        data = await request.json()
+        api_key = data.get('api_key')
+
+        success = config_manager.update_cloud_translate_config(api_key)
+
+        if success:
+            return web.json_response({'message': '配置已更新'})
+        else:
+            print(f"{ERROR_PREFIX} Cloud翻译配置更新失败")
+            return web.json_response({'error': '配置更新失败'}, status=500)
+    except Exception as e:
+        print(f"{ERROR_PREFIX} Cloud翻译配置更新异常 | 错误:{str(e)}")
         return web.json_response({'error': str(e)}, status=500)
 
 @PromptServer.instance.routes.post(f'{API_PREFIX}/config/system_prompts')
@@ -450,6 +475,42 @@ async def baidu_translate(request):
     except Exception as e:
         error_msg = str(e)
         print(f"{ERROR_PREFIX} 百度翻译请求异常 | 错误:{error_msg}")
+        return web.json_response({"success": False, "error": error_msg})
+    finally:
+        if request_id and request_id in ACTIVE_TASKS:
+            del ACTIVE_TASKS[request_id]
+
+@PromptServer.instance.routes.post(f'{API_PREFIX}/cloud/translate')
+async def cloud_translate(request):
+    """Cloud翻译API"""
+    request_id = None
+    try:
+        data = await request.json()
+        text = data.get("text")
+        from_lang = data.get("from", "auto")
+        to_lang = data.get("to", "zh")
+        request_id = data.get("request_id")
+        is_auto = data.get("is_auto", False)
+
+        if not request_id:
+            return web.json_response({"success": False, "error": "缺少request_id"}, status=400)
+
+        task = asyncio.create_task(CloudTranslateService.translate(text, from_lang, to_lang, request_id, is_auto))
+        ACTIVE_TASKS[request_id] = task
+
+        result = await task
+
+        if not result.get('success') and not result.get('cancelled', False):
+            error_msg = result.get('error', '未知错误')
+            print(f"{ERROR_PREFIX} Cloud翻译请求失败 | 请求ID:{request_id} | 错误:{error_msg}")
+
+        return web.json_response(result)
+    except asyncio.CancelledError:
+        print(f"{PREFIX} Cloud翻译任务被取消 | ID:{request_id}")
+        return web.json_response({"success": False, "error": "请求已取消", "cancelled": True}, status=400)
+    except Exception as e:
+        error_msg = str(e)
+        print(f"{ERROR_PREFIX} Cloud翻译请求异常 | 错误:{error_msg}")
         return web.json_response({"success": False, "error": error_msg})
     finally:
         if request_id and request_id in ACTIVE_TASKS:

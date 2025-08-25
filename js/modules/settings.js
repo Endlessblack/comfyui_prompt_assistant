@@ -1212,6 +1212,7 @@ export function registerSettings() {
                     defaultValue: "baidu",
                     options: [
                         { text: "百度翻译", value: "baidu" },
+                        { text: "Cloud翻译", value: "cloud" },
                         { text: "大语言模型翻译", value: "llm" }
                     ],
                     tooltip: "可选百度机翻或者大语言模型翻译，注意：大语言模型翻译速度比较慢，格式可能会发生变化。",

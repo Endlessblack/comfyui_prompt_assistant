@@ -118,6 +118,58 @@ class APIService {
     }
 
     /**
+     * Cloud 翻译API
+     */
+    static async cloudTranslate(text, from = 'auto', to = 'zh', request_id = null, is_auto = false) {
+        if (!request_id) {
+            request_id = `cloud_trans_${Date.now()}_${Math.random().toString(36).substr(2, 6)}`;
+        }
+
+        const controller = new AbortController();
+        const signal = controller.signal;
+        runningRequests.set(request_id, controller);
+
+        try {
+            if (!text || text.trim() === '') {
+                throw new Error('待翻译文本不能为空');
+            }
+
+            const apiUrl = this.getApiUrl('/prompt_assistant/api/cloud/translate');
+
+            const response = await fetch(apiUrl, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json'
+                },
+                body: JSON.stringify({
+                    text,
+                    from,
+                    to,
+                    request_id,
+                    is_auto
+                }),
+                signal
+            });
+
+            const result = await response.json();
+            return result;
+        } catch (error) {
+            if (error.name === 'AbortError') {
+                logger.debug(`Cloud翻译请求被用户中止 | ID: ${request_id}`);
+                return { success: false, error: '请求已取消', cancelled: true };
+            }
+            return {
+                success: false,
+                error: error.message
+            };
+        } finally {
+            if (runningRequests.has(request_id)) {
+                runningRequests.delete(request_id);
+            }
+        }
+    }
+
+    /**
      * 批量翻译
      */
     static async batchBaiduTranslate(texts, from = 'auto', to = 'zh') {
@@ -130,6 +182,28 @@ class APIService {
             const results = [];
             for (const text of texts) {
                 const result = await this.baiduTranslate(text, from, to);
+                results.push(result);
+            }
+
+            return results;
+        } catch (error) {
+            logger.error(`批量翻译 | 结果:失败 | 错误:${error.message}`);
+            return [];
+        }
+    }
+
+    /**
+     * 批量 Cloud 翻译
+     */
+    static async batchCloudTranslate(texts, from = 'auto', to = 'zh') {
+        try {
+            if (!Array.isArray(texts) || texts.length === 0) {
+                throw new Error('待翻译文本数组不能为空');
+            }
+
+            const results = [];
+            for (const text of texts) {
+                const result = await this.cloudTranslate(text, from, to);
                 results.push(result);
             }
 

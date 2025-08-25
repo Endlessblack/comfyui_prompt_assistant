@@ -20,6 +20,7 @@ class APIConfigManager {
         this.llmModel = null;
         this.llmApiKey = null;
         this.llmBaseUrl = null;
+        this.cloudApiKey = null;
         this.visionModel = null;
         this.visionApiKey = null;
         this.visionBaseUrl = null;
@@ -64,9 +65,15 @@ class APIConfigManager {
                             baiduConfig.secret_key = baiduSecretValue;
                         }
 
+                        // 处理 Cloud 翻译配置
+                        const cloudConfig = {
+                            api_key: controls.cloud.apiKey.value.trim(),
+                        };
+
                         // 获取配置值
                         const config = {
                             baidu: baiduConfig,
+                            cloud: cloudConfig,
                             llm: {
                                 current_provider: currentLLMProvider,
                                 providers: this.llmAllProviders || {}
@@ -78,7 +85,7 @@ class APIConfigManager {
                         };
 
                         // 确保每个提供商都有配置
-                        const providerList = ["zhipu", "siliconflow", "custom"];
+                        const providerList = ["zhipu", "siliconflow", "gemini", "custom"];
                         providerList.forEach(provider => {
                             // 确保LLM提供商配置存在
                             if (!config.llm.providers[provider]) {
@@ -117,6 +124,11 @@ class APIConfigManager {
                                 method: 'POST',
                                 headers: { 'Content-Type': 'application/json' },
                                 body: JSON.stringify(config.baidu)
+                            }),
+                            fetch('/prompt_assistant/api/config/cloud_translate', {
+                                method: 'POST',
+                                headers: { 'Content-Type': 'application/json' },
+                                body: JSON.stringify(config.cloud)
                             }),
                             fetch('/prompt_assistant/api/config/llm', {
                                 method: 'POST',
@@ -190,7 +202,10 @@ class APIConfigManager {
         // 1. 百度翻译 API 配置
         const baiduSection = this._createBaiduSection();
 
-        // 2. LLM 配置
+        // 2. Cloud 翻译配置
+        const cloudSection = this._createCloudSection();
+
+        // 3. LLM 配置
         const llmSection = this._createLLMSection();
 
         // 3. 视觉模型配置
@@ -198,6 +213,7 @@ class APIConfigManager {
 
         // 添加所有部分到表单
         form.appendChild(baiduSection);
+        form.appendChild(cloudSection);
         form.appendChild(llmSection);
         form.appendChild(visionSection);
         container.appendChild(form);
@@ -235,6 +251,19 @@ class APIConfigManager {
         return baiduSection;
     }
 
+    _createCloudSection() {
+        const cloudSection = createFormGroup('Cloud翻译配置', [
+            { text: 'Cloud Translate API 申请', url: 'https://cloud.google.com/translate' }
+        ]);
+        const cloudApiKey = createInputGroup('', '请输入Cloud Translate API Key');
+        const cloudGroup = createHorizontalFormGroup([
+            { label: 'API Key', element: cloudApiKey.input }
+        ]);
+        cloudSection.appendChild(cloudGroup);
+        this.cloudApiKey = cloudApiKey.input;
+        return cloudSection;
+    }
+
     /**
      * 创建LLM配置部分
      * @returns {HTMLElement} LLM配置部分的DOM元素
@@ -250,6 +279,7 @@ class APIConfigManager {
         const llmProvider = createSelectGroup('', [
             { value: 'zhipu', text: '智谱' },
             { value: 'siliconflow', text: '硅基流动' },
+            { value: 'gemini', text: 'Gemini' },
             { value: 'custom', text: '自定义' }
         ]);
         const llmModelInput = createInputGroup('', '请输入模型名称');
@@ -570,11 +600,16 @@ class APIConfigManager {
      */
     async _loadAPIConfig(container) {
         try {
-            const [baiduConfig, llmConfig, visionConfig] = await Promise.all([
+            const [baiduConfig, cloudConfig, llmConfig, visionConfig] = await Promise.all([
                 fetch('/prompt_assistant/api/config/baidu_translate').then(r => r.json()),
+                fetch('/prompt_assistant/api/config/cloud_translate').then(r => r.json()),
                 fetch('/prompt_assistant/api/config/llm').then(r => r.json()),
                 fetch('/prompt_assistant/api/config/vision').then(r => r.json())
             ]);
+
+                        if (cloudConfig.api_key) {
+                this.cloudApiKey.value = cloudConfig.api_key;
+            }
 
             // 设置百度翻译配置
             if (baiduConfig.app_id) {
@@ -590,7 +625,7 @@ class APIConfigManager {
             this.visionAllProviders = visionConfig.providers || {};
 
             // 为所有提供商预处理API密钥状态
-            const providerList = ["zhipu", "siliconflow", "custom"];
+            const providerList = ["zhipu", "siliconflow", "gemini", "custom"];
 
             // 处理LLM提供商的API密钥
             providerList.forEach(provider => {
@@ -663,6 +698,7 @@ class APIConfigManager {
             // 将表单控件暴露给保存回调
             container.formControls = {
                 baidu: { appId: this.baiduAppId, secret: this.baiduSecret },
+                cloud: { apiKey: this.cloudApiKey },
                 llm: {
                     provider: this.llmProvider,
                     temperature: this.llmTemperature,
@@ -708,7 +744,8 @@ class APIConfigManager {
             }
         } else {
             baseUrl = provider === 'zhipu' ? 'https://open.bigmodel.cn/api/paas/v4' :
-                (provider === 'siliconflow' ? 'https://api.siliconflow.cn/v1' : '');
+                (provider === 'siliconflow' ? 'https://api.siliconflow.cn/v1' :
+                    (provider === 'gemini' ? 'https://generativelanguage.googleapis.com/v1beta' : ''));
         }
 
         // 检查API密钥是否为掩码
@@ -768,7 +805,8 @@ class APIConfigManager {
             }
         } else {
             baseUrl = provider === 'zhipu' ? 'https://open.bigmodel.cn/api/paas/v4' :
-                (provider === 'siliconflow' ? 'https://api.siliconflow.cn/v1' : '');
+                (provider === 'siliconflow' ? 'https://api.siliconflow.cn/v1' :
+                    (provider === 'gemini' ? 'https://generativelanguage.googleapis.com/v1beta' : ''));
         }
 
         // 检查API密钥是否为掩码

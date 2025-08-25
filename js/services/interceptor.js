@@ -548,6 +548,8 @@ async function translateWithCache(text) {
         let result;
         if (translateType === "baidu") {
             result = await APIService.baiduTranslate(text, langResult.from, langResult.to, null, true);
+        } else if (translateType === "cloud") {
+            result = await APIService.cloudTranslate(text, langResult.from, langResult.to, null, true);
         } else {
             result = await APIService.llmTranslate(text, langResult.from, langResult.to, null, true);
         }

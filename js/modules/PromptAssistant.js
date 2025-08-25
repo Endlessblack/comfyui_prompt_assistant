@@ -1701,6 +1701,14 @@ class PromptAssistant {
                                             langResult.to,
                                             request_id
                                         );
+                                    } else if (translateType === "cloud") {
+                                        // 使用Cloud翻译服务
+                                        result = await APIService.cloudTranslate(
+                                            inputValue,
+                                            langResult.from,
+                                            langResult.to,
+                                            request_id
+                                        );
                                     } else {
                                         // 使用LLM翻译服务
                                         result = await APIService.llmTranslate(
@@ -1778,12 +1786,25 @@ class PromptAssistant {
                             icon: `<span class="pi ${currentProvider === 'baidu' ? 'pi-check-circle active-status' : 'pi-circle-off inactive-status'}"></span>`,
                             onClick: (context) => {
                                 logger.log("右键菜单 | 动作: 切换到百度翻译");
-                                // 切换翻译提供商功能
                                 app.ui.settings.setSettingValue("PromptAssistant.Settings.TranslateType", "baidu");
                                 UIToolkit.showStatusTip(
                                     context.buttonElement,
                                     'success',
                                     `已切换到: 百度翻译`,
+                                    null
+                                );
+                            }
+                        },
+                        {
+                            label: "使用Cloud翻译",
+                            icon: `<span class="pi ${currentProvider === 'cloud' ? 'pi-check-circle active-status' : 'pi-circle-off inactive-status'}"></span>`,
+                            onClick: (context) => {
+                                logger.log("右键菜单 | 动作: 切换到Cloud翻译");
+                                app.ui.settings.setSettingValue("PromptAssistant.Settings.TranslateType", "cloud");
+                                UIToolkit.showStatusTip(
+                                    context.buttonElement,
+                                    'success',
+                                    `已切换到: Cloud翻译`,
                                     null
                                 );
                             }

@@ -10,6 +10,7 @@ from comfy.model_management import InterruptProcessingException
 
 from ..services.llm import LLMService
 from ..services.baidu import BaiduTranslateService
+from ..services.cloud import CloudTranslateService
 from ..services.error_util import format_api_error
 
 
@@ -32,7 +33,7 @@ class PromptTranslate:
             "required": {
                 "原文": ("STRING", {"forceInput": True, "default": "", "multiline": True, "placeholder": "输入要翻译的文本..."}),
                 "目标语言": (["英文", "中文"], {"default": "英文"}),
-                "翻译服务": (["百度翻译", "智谱翻译", "硅基流动翻译", "自定义翻译"], {"default": "百度翻译"}),
+                "翻译服务": (["百度翻译", "Cloud翻译", "智谱翻译", "硅基流动翻译", "自定义翻译"], {"default": "百度翻译"}),
             },
         }
 
@@ -124,6 +125,8 @@ class PromptTranslate:
 
             if 翻译服务 == "百度翻译":
                 result = self._translate_with_baidu(原文, detected_lang, to_lang)
+            elif 翻译服务 == "Cloud翻译":
+                result = self._translate_with_cloud(原文, detected_lang, to_lang)
             elif 翻译服务 == "智谱翻译":
                 result = self._translate_with_llm(原文, detected_lang, to_lang, "zhipu")
             elif 翻译服务 == "硅基流动翻译":
@@ -190,6 +193,34 @@ class PromptTranslate:
 
             return result_container.get('result')
 
+        except Exception as e:
+            return {"success": False, "error": str(e)}
+
+    def _translate_with_cloud(self, text, from_lang, to_lang):
+        """使用Cloud翻译服务"""
+        try:
+            request_id = f"translate_{int(time.time())}_{random.randint(1000, 9999)}"
+            result_container = {}
+
+            thread = threading.Thread(
+                target=self._run_async_translation,
+                args=(CloudTranslateService.translate, text, from_lang, to_lang, request_id, result_container)
+            )
+            thread.start()
+
+            while thread.is_alive():
+                try:
+                    import nodes
+                    nodes.before_node_execution()
+                except:
+                    result_container['interrupted'] = True
+                    thread.join(timeout=1.0)
+                    if thread.is_alive():
+                        print(f"{self.LOG_PREFIX} 翻译线程未能及时响应中断")
+                    raise InterruptProcessingException()
+                time.sleep(0.1)
+
+            return result_container.get('result')
         except Exception as e:
             return {"success": False, "error": str(e)}
 

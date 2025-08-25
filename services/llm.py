@@ -13,6 +13,7 @@ class LLMService:
         'openai': None,  # 使用默认
         'siliconflow': 'https://api.siliconflow.cn/v1',
         'zhipu': 'https://open.bigmodel.cn/api/paas/v4',
+        'gemini': 'https://generativelanguage.googleapis.com/v1beta/openai',
         'custom': None  # 使用配置中的自定义URL
     }
 
@@ -35,10 +36,16 @@ class LLMService:
             base_url = cls._provider_base_urls.get(provider)
         
         # 创建简化的httpx客户端，不使用HTTP/2，避免额外依赖
-        http_client = httpx.AsyncClient(
-            timeout=httpx.Timeout(15.0)  # 设置超时时间，稍微增加以适应网络延迟
-        )
-        
+        if provider == 'gemini':
+            http_client = httpx.AsyncClient(
+                timeout=httpx.Timeout(15.0),
+                params={"key": api_key}
+            )
+        else:
+            http_client = httpx.AsyncClient(
+                timeout=httpx.Timeout(15.0)
+            )
+
         kwargs = {
             "api_key": api_key,
             "http_client": http_client,
@@ -48,11 +55,11 @@ class LLMService:
             # 确保base_url末尾没有斜杠
             base_url = base_url.rstrip('/')
             kwargs["base_url"] = base_url
-            
+
             # 添加调试日志
             from ..server import PREFIX
             print(f"{PREFIX} 创建OpenAI客户端 | 提供商:{provider} | 基础URL:{base_url}")
-            
+
         # 创建客户端并缓存
         client = AsyncOpenAI(**kwargs)
         return client
@@ -117,6 +124,7 @@ class LLMService:
                 'zhipu': '智谱',
                 'siliconflow': '硅基流动',
                 'openai': 'OpenAI',
+                'gemini': 'Gemini',
                 'custom': '自定义'
             }.get(provider, provider)
             
@@ -253,6 +261,7 @@ class LLMService:
                 'zhipu': '智谱',
                 'siliconflow': '硅基流动',
                 'openai': 'OpenAI',
+                'gemini': 'Gemini',
                 'custom': '自定义'
             }.get(provider, provider)
             
