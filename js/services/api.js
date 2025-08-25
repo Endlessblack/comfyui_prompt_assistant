@@ -30,6 +30,21 @@ class APIService {
     }
 
     /**
+     * 安全解析JSON响应，处理HTTP 200但无内容的情况
+     */
+    static async parseJsonResponse(response) {
+        const text = await response.text();
+        if (!text || text.trim().length === 0) {
+            return { success: false, error: '服务返回空响应' };
+        }
+        try {
+            return JSON.parse(text);
+        } catch (e) {
+            return { success: false, error: '响应解析失败' };
+        }
+    }
+
+    /**
      * 取消一个正在进行的请求
      */
     static async cancelRequest(requestId) {
@@ -52,7 +67,7 @@ class APIService {
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ request_id: requestId })
             });
-            const result = await response.json();
+            const result = await this.parseJsonResponse(response);
             logger.debug(`后端任务取消请求已发送 | ID: ${requestId} | 结果: ${JSON.stringify(result)}`);
             return result;
         } catch (error) {
@@ -98,7 +113,7 @@ class APIService {
                 signal // 传递signal
             });
 
-            const result = await response.json();
+            const result = await this.parseJsonResponse(response);
             return result;
         } catch (error) {
             if (error.name === 'AbortError') {
@@ -151,7 +166,7 @@ class APIService {
                 signal
             });
 
-            const result = await response.json();
+            const result = await this.parseJsonResponse(response);
             return result;
         } catch (error) {
             if (error.name === 'AbortError') {
@@ -250,7 +265,7 @@ class APIService {
                 signal // 传递signal
             });
 
-            const result = await response.json();
+            const result = await this.parseJsonResponse(response);
             logger.debug(`LLM扩写请求成功 | 请求ID:${request_id} | 结果:${JSON.stringify(result)}`);
 
             return result;
@@ -308,7 +323,7 @@ class APIService {
                 signal // 传递signal
             });
 
-            const result = await response.json();
+            const result = await this.parseJsonResponse(response);
             return result;
         } catch (error) {
             if (error.name === 'AbortError') {
@@ -367,9 +382,8 @@ class APIService {
                 body: JSON.stringify(requestData),
                 signal // 传递signal
             });
-
             // 解析响应
-            const result = await response.json();
+            const result = await this.parseJsonResponse(response);
             logger.debug(`视觉分析请求完成 | 请求ID:${request_id}`);
 
             return result;

@@ -269,10 +269,12 @@ class VisionService:
                         full_content += content
                         if stream_callback:
                             stream_callback(content)
-                
+                if not full_content.strip():
+                    return {"success": False, "error": f"{provider_display_name}返回空结果"}
+
                 # 输出结构化成功日志
                 print(f"{PREFIX} 视觉模型分析成功 | 服务:{provider_display_name} | 请求ID:{request_id} | 结果字符数:{len(full_content)}")
-                
+
                 return {
                     "success": True,
                     "data": {

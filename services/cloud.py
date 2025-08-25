@@ -53,7 +53,10 @@ class CloudTranslateService:
                 raise Exception(f"Cloud: {message}")
             translations = data.get('data', {}).get('translations', [])
             translated_parts = [t.get('translatedText', '') for t in translations]
-            return '\n'.join(translated_parts)
+            translated_text = '\n'.join(translated_parts).strip()
+            if not translated_text:
+                raise Exception("Cloud: 翻译结果为空")
+            return translated_text
 
     @staticmethod
     async def translate(text: str, from_lang: str = 'auto', to_lang: str = 'zh', request_id: Optional[str] = None, is_auto: bool = False):
@@ -79,7 +82,9 @@ class CloudTranslateService:
                     translated_parts.append(translated)
                     if len(chunks) > 1:
                         await asyncio.sleep(1)
-            translated_text = '\n'.join(translated_parts)
+            translated_text = '\n'.join(translated_parts).strip()
+            if not translated_text:
+                return {"success": False, "error": "Cloud: 翻译结果为空"}
             print(f"{prefix} {'工作流翻译完成' if is_auto else '翻译完成'} | 服务:Cloud翻译 | 请求ID:{request_id} | 结果字符数:{len(translated_text)}")
             return {
                 "success": True,

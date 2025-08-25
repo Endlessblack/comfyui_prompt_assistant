@@ -175,6 +175,8 @@ class BaiduTranslateService:
                         return {"success": False, "error": str(chunk_error)}
             
             translated_text = '\n'.join(translated_parts)
+            if not translated_text.strip():
+                return {"success": False, "error": "百度: 翻译结果为空"}
             prefix = AUTO_TRANSLATE_PREFIX if is_auto else PREFIX
             print(f"{prefix} {'工作流翻译完成' if is_auto else '翻译完成'} | 服务:百度翻译 | 请求ID:{request_id} | 结果字符数:{len(translated_text)}")
             
