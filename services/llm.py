@@ -18,22 +18,22 @@ class LLMService:
     }
 
     @classmethod
-    def get_openai_client(cls, api_key: str, provider: str) -> AsyncOpenAI:
+    def get_openai_client(
+        cls, api_key: str, provider: str, base_url: Optional[str] = None
+    ) -> AsyncOpenAI:
         """获取OpenAI客户端"""
-        # 否则创建新客户端
-        base_url = None
-        
-        # 如果是自定义提供商，从配置中获取base_url
-        if provider == 'custom':
-            from ..config_manager import config_manager
-            config = config_manager.get_llm_config()
-            if 'providers' in config and 'custom' in config['providers']:
-                base_url = config['providers']['custom'].get('base_url')
-                # 确保base_url不以/chat/completions结尾，避免路径重复
-                if base_url and base_url.endswith('/chat/completions'):
-                    base_url = base_url.rstrip('/chat/completions')
-        else:
-            base_url = cls._provider_base_urls.get(provider)
+        # 如果外部未提供base_url，则根据配置或预设获取
+        if not base_url:
+            if provider == 'custom':
+                from ..config_manager import config_manager
+                config = config_manager.get_llm_config()
+                if 'providers' in config and 'custom' in config['providers']:
+                    base_url = config['providers']['custom'].get('base_url')
+                    # 确保base_url不以/chat/completions结尾，避免路径重复
+                    if base_url and base_url.endswith('/chat/completions'):
+                        base_url = base_url.rstrip('/chat/completions')
+            else:
+                base_url = cls._provider_base_urls.get(provider)
         
         # 创建简化的httpx客户端，不使用HTTP/2，避免额外依赖
         if provider == 'gemini':
@@ -146,6 +146,7 @@ class LLMService:
             api_key = config.get('api_key')
             model = config.get('model')
             provider = config.get('provider', 'unknown')
+            base_url = config.get('base_url')
             temperature = config.get('temperature', 0.7)
             top_p = config.get('top_p', 0.9)
             max_tokens = config.get('max_tokens', 2000)
@@ -209,7 +210,7 @@ class LLMService:
             ]
 
             # 使用OpenAI SDK
-            client = LLMService.get_openai_client(api_key, provider)
+            client = LLMService.get_openai_client(api_key, provider, base_url)
             try:
                 # 添加调试信息
                 print(f"{PREFIX} 调用LLM API | 服务:{provider_display_name} | 模型:{model}")
@@ -223,27 +224,82 @@ class LLMService:
                     "response_format": {"type": "text"},
                 }
 
+                request_kwargs["stream"] = True
+                stream = await client.chat.completions.create(**request_kwargs)
+                full_content = ""
+                finish = None
+                first_logged = False
+                async for chunk in stream:
+                    choice0 = chunk.choices[0]
+                    delta = getattr(choice0, "delta", None)
+                    finish = getattr(choice0, "finish_reason", finish)
+                    part = getattr(delta, "content", None) if delta else None
+                    piece = ""
+                    if isinstance(part, str):
+                        piece = part
+                    elif isinstance(part, list):
+                        buf: List[str] = []
+                        for p in part:
+                            if isinstance(p, dict):
+                                t = p.get("text") or p.get("content") or ""
+                                if isinstance(t, str) and t:
+                                    buf.append(t)
+                        piece = "".join(buf)
+                    if piece:
+                        if not first_logged and provider == 'gemini':
+                            print(f"{PREFIX} [Gemini|stream] first-chunk len={len(piece)}")
+                            first_logged = True
+                        full_content += piece
+                        if stream_callback:
+                            stream_callback(piece)
                 if provider == 'gemini':
-                    completion = await client.chat.completions.create(**request_kwargs)
-                    try:
-                        full_content = LLMService._extract_valid_content(completion, provider_display_name)
-                    except ValueError as e:
-                        return {"success": False, "error": str(e)}
-                    if stream_callback:
-                        stream_callback(full_content)
+                    print(f"{PREFIX} [Gemini|stream] finish_reason={finish} total_len={len(full_content)}")
+                    if not full_content:
+                        req2 = dict(request_kwargs)
+                        req2["stream"] = False
+                        resp2 = await client.chat.completions.create(**req2)
+                        try:
+                            full_content = LLMService._extract_valid_content(resp2, provider_display_name)
+                        except ValueError:
+                            full_content = ""
+                        finish = getattr(resp2.choices[0], "finish_reason", finish)
+                        print(f"{PREFIX} [Gemini|stream] fallback non-stream used len={len(full_content)}")
+                    if finish == "length" or not full_content:
+                        for k in range(3):
+                            tail_or_continued = full_content[-1200:] if full_content else "(continued)"
+                            cont_messages = request_kwargs["messages"] + [
+                                {"role": "assistant", "content": tail_or_continued},
+                                {"role": "user", "content": "Continue."}
+                            ]
+                            tmp_max_tokens = min(int(max_tokens * 1.5) if max_tokens else 1500, 4096)
+                            req3 = {
+                                "model": model,
+                                "messages": cont_messages,
+                                "temperature": temperature,
+                                "top_p": top_p,
+                                "max_tokens": tmp_max_tokens,
+                                "response_format": {"type": "text"},
+                                "stream": False,
+                            }
+                            resp3 = await client.chat.completions.create(**req3)
+                            try:
+                                addition = LLMService._extract_valid_content(resp3, provider_display_name)
+                            except ValueError:
+                                addition = ""
+                            finish = getattr(resp3.choices[0], "finish_reason", finish)
+                            if addition:
+                                full_content += addition
+                            print(f"{PREFIX} auto-continue#{k+1} finish={finish} len={len(full_content)}")
+                            if finish != "length" or not addition:
+                                break
+                    if finish in {"content_filter", "safety"}:
+                        print(f"{PREFIX} finish_reason={finish} total_len={len(full_content)}")
+                        # 允许返回空内容
+                    elif not full_content.strip():
+                        return {"success": False, "error": f"{provider_display_name}返回空结果"}
                 else:
-                    request_kwargs["stream"] = True
-                    stream = await client.chat.completions.create(**request_kwargs)
-                    full_content = ""
-                    async for chunk in stream:
-                        if chunk.choices[0].delta.content:
-                            content = chunk.choices[0].delta.content
-                            full_content += content
-                            if stream_callback:
-                                stream_callback(content)
-
-                if not full_content.strip():
-                    return {"success": False, "error": f"{provider_display_name}返回空结果"}
+                    if not full_content.strip():
+                        return {"success": False, "error": f"{provider_display_name}返回空结果"}
 
                 # 输出结构化成功日志
                 print(f"{PREFIX} LLM扩写成功 | 服务:{provider_display_name} | 请求ID:{request_id} | 结果字符数:{len(full_content)}")
@@ -294,6 +350,7 @@ class LLMService:
             api_key = config.get('api_key')
             model = config.get('model')
             provider = config.get('provider', 'unknown')
+            base_url = config.get('base_url')
             temperature = config.get('temperature', 0.7)
             top_p = config.get('top_p', 0.9)
             max_tokens = config.get('max_tokens', 2000)
@@ -349,7 +406,7 @@ class LLMService:
             ]
 
             # 使用OpenAI SDK
-            client = LLMService.get_openai_client(api_key, provider)
+            client = LLMService.get_openai_client(api_key, provider, base_url)
             try:
                 # 添加调试信息
                 print(f"{PREFIX} 调用LLM API | 服务:{provider_display_name} | 模型:{model}")
@@ -363,27 +420,81 @@ class LLMService:
                     "response_format": {"type": "text"},
                 }
 
+                request_kwargs["stream"] = True
+                stream = await client.chat.completions.create(**request_kwargs)
+                full_content = ""
+                finish = None
+                first_logged = False
+                async for chunk in stream:
+                    choice0 = chunk.choices[0]
+                    delta = getattr(choice0, "delta", None)
+                    finish = getattr(choice0, "finish_reason", finish)
+                    part = getattr(delta, "content", None) if delta else None
+                    piece = ""
+                    if isinstance(part, str):
+                        piece = part
+                    elif isinstance(part, list):
+                        buf: List[str] = []
+                        for p in part:
+                            if isinstance(p, dict):
+                                t = p.get("text") or p.get("content") or ""
+                                if isinstance(t, str) and t:
+                                    buf.append(t)
+                        piece = "".join(buf)
+                    if piece:
+                        if not first_logged and provider == 'gemini':
+                            print(f"{PREFIX} [Gemini|stream] first-chunk len={len(piece)}")
+                            first_logged = True
+                        full_content += piece
+                        if stream_callback:
+                            stream_callback(piece)
                 if provider == 'gemini':
-                    completion = await client.chat.completions.create(**request_kwargs)
-                    try:
-                        full_content = LLMService._extract_valid_content(completion, provider_display_name)
-                    except ValueError as e:
-                        return {"success": False, "error": str(e)}
-                    if stream_callback:
-                        stream_callback(full_content)
+                    print(f"{PREFIX} [Gemini|stream] finish_reason={finish} total_len={len(full_content)}")
+                    if not full_content:
+                        req2 = dict(request_kwargs)
+                        req2["stream"] = False
+                        resp2 = await client.chat.completions.create(**req2)
+                        try:
+                            full_content = LLMService._extract_valid_content(resp2, provider_display_name)
+                        except ValueError:
+                            full_content = ""
+                        finish = getattr(resp2.choices[0], "finish_reason", finish)
+                        print(f"{PREFIX} [Gemini|stream] fallback non-stream used len={len(full_content)}")
+                    if finish == "length" or not full_content:
+                        for k in range(3):
+                            tail_or_continued = full_content[-1200:] if full_content else "(continued)"
+                            cont_messages = request_kwargs["messages"] + [
+                                {"role": "assistant", "content": tail_or_continued},
+                                {"role": "user", "content": "Continue."}
+                            ]
+                            tmp_max_tokens = min(int(max_tokens * 1.5) if max_tokens else 1500, 4096)
+                            req3 = {
+                                "model": model,
+                                "messages": cont_messages,
+                                "temperature": temperature,
+                                "top_p": top_p,
+                                "max_tokens": tmp_max_tokens,
+                                "response_format": {"type": "text"},
+                                "stream": False,
+                            }
+                            resp3 = await client.chat.completions.create(**req3)
+                            try:
+                                addition = LLMService._extract_valid_content(resp3, provider_display_name)
+                            except ValueError:
+                                addition = ""
+                            finish = getattr(resp3.choices[0], "finish_reason", finish)
+                            if addition:
+                                full_content += addition
+                            print(f"{PREFIX} auto-continue#{k+1} finish={finish} len={len(full_content)}")
+                            if finish != "length" or not addition:
+                                break
+                    if finish in {"content_filter", "safety"}:
+                        print(f"{PREFIX} finish_reason={finish} total_len={len(full_content)}")
+                    elif not full_content.strip():
+                        return {"success": False, "error": f"{provider_display_name}返回空结果"}
                 else:
-                    request_kwargs["stream"] = True
-                    stream = await client.chat.completions.create(**request_kwargs)
-                    full_content = ""
-                    async for chunk in stream:
-                        if chunk.choices[0].delta.content:
-                            content = chunk.choices[0].delta.content
-                            full_content += content
-                            if stream_callback:
-                                stream_callback(content)
-
-                if not full_content.strip():
-                    return {"success": False, "error": f"{provider_display_name}返回空结果"}
+                    if not full_content.strip():
+                        return {"success": False, "error": f"{provider_display_name}返回空结果"}
 
                 # 输出结构化成功日志
                 prefix = AUTO_TRANSLATE_PREFIX if is_auto else PREFIX
