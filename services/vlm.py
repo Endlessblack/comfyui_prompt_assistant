@@ -260,7 +260,11 @@ class VisionService:
 
                 if provider == 'gemini':
                     resp = await client.chat.completions.create(**request_kwargs)
-                    full_content = resp.choices[0].message.content if resp.choices else ""
+                    full_content = ""
+                    if resp.choices:
+                        message = resp.choices[0].message
+                        if message and getattr(message, "content", None):
+                            full_content = message.content
                     if stream_callback and full_content:
                         stream_callback(full_content)
                 else:

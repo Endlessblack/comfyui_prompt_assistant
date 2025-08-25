@@ -185,7 +185,11 @@ class LLMService:
 
                 if provider == 'gemini':
                     completion = await client.chat.completions.create(**request_kwargs)
-                    full_content = completion.choices[0].message.content if completion.choices else ""
+                    full_content = ""
+                    if completion.choices:
+                        message = completion.choices[0].message
+                        if message and getattr(message, "content", None):
+                            full_content = message.content
                     if stream_callback and full_content:
                         stream_callback(full_content)
                 else:
@@ -320,7 +324,11 @@ class LLMService:
 
                 if provider == 'gemini':
                     completion = await client.chat.completions.create(**request_kwargs)
-                    full_content = completion.choices[0].message.content if completion.choices else ""
+                    full_content = ""
+                    if completion.choices:
+                        message = completion.choices[0].message
+                        if message and getattr(message, "content", None):
+                            full_content = message.content
                     if stream_callback and full_content:
                         stream_callback(full_content)
                 else:
