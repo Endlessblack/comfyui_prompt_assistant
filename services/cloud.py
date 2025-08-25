@@ -1,8 +1,10 @@
+import os
 import random
-import aiohttp
 import asyncio
 import time
-from typing import Optional, Dict, Any
+from typing import Optional
+
+from google.cloud import translate
 
 from .error_util import format_api_error
 
@@ -34,62 +36,56 @@ class CloudTranslateService:
         return chunks
 
     @staticmethod
-    async def translate_chunk(session: aiohttp.ClientSession, chunk: str, api_key: str, project_id: str, location: str, from_lang: str, to_lang: str):
-        url = f'https://translation.googleapis.com/v3/projects/{project_id}/locations/{location}:translateText'
-        params = {
-            'key': api_key
-        }
-        body: Dict[str, Any] = {
-            'contents': [chunk],
-            'targetLanguageCode': to_lang,
-            'mimeType': 'text/plain'
+    async def translate_chunk(client: translate.TranslationServiceClient, chunk: str, project_id: str, location: str, from_lang: str, to_lang: str):
+        parent = f"projects/{project_id}/locations/{location}"
+        request = {
+            "parent": parent,
+            "contents": [chunk],
+            "target_language_code": to_lang,
         }
         if from_lang != 'auto':
-            body['sourceLanguageCode'] = from_lang
-        async with session.post(url, params=params, json=body, timeout=10) as resp:
-            if resp.status != 200:
-                raise Exception(f"Cloud: HTTP请求失败，状态码: {resp.status}")
-            data = await resp.json()
-            if 'error' in data:
-                message = data['error'].get('message', '未知错误')
-                raise Exception(f"Cloud: {message}")
-            translations = data.get('translations', [])
-            translated_parts = [t.get('translatedText', '') for t in translations]
-            translated_text = '\n'.join(translated_parts).strip()
-            if not translated_text:
-                raise Exception("Cloud: 翻译结果为空")
-            return translated_text
+            request["source_language_code"] = from_lang
+        loop = asyncio.get_running_loop()
+        response = await loop.run_in_executor(None, lambda: client.translate_text(request=request))
+        translations = getattr(response, 'translations', [])
+        translated_text = translations[0].translated_text.strip() if translations else ''
+        if not translated_text:
+            raise Exception("Cloud: 翻译结果为空")
+        return translated_text
 
     @staticmethod
     async def translate(text: str, from_lang: str = 'auto', to_lang: str = 'zh', request_id: Optional[str] = None, is_auto: bool = False):
         try:
             from ..config_manager import config_manager
             config = config_manager.get_cloud_translate_config()
-            api_key = config.get('api_key')
             project_id = config.get('project_id')
-            location = config.get('location') or 'global'
-            if not api_key or not project_id:
-                return {"success": False, "error": "Cloud: 请先配置Cloud Translate API密钥和项目ID"}
+            location = config.get('location') or os.getenv('TRANSLATE_LOCATION') or 'global'
+            credentials_path = os.getenv('GOOGLE_APPLICATION_CREDENTIALS')
+            if not credentials_path or not os.path.exists(credentials_path):
+                return {"success": False, "error": "Cloud: 未检测到有效的GOOGLE_APPLICATION_CREDENTIALS"}
+            if not project_id:
+                return {"success": False, "error": "Cloud: 请先配置项目ID"}
+
+            client = translate.TranslationServiceClient()
 
             request_id = request_id or f"cloud_trans_{int(time.time())}_{random.randint(1000, 9999)}"
             from ..server import PREFIX, AUTO_TRANSLATE_PREFIX
             prefix = AUTO_TRANSLATE_PREFIX if is_auto else PREFIX
-            print(f"{prefix} {'工作流自动翻译' if is_auto else '翻译请求'} | 服务:Cloud翻译 | 请求ID:{request_id} | 原文长度:{len(text)} | 方向:{from_lang}->{to_lang}")
+            print(f"{prefix} {'工作流自动翻译' if is_auto else '翻译请求'} | 服务:Cloud翻译 | 请求ID:{request_id} | 原文长度:{len(text)} | 方向:{from_lang}->{to_lang} | 位置:{location} | 方法:translateText")
 
             chunks = CloudTranslateService.split_text_by_paragraphs(text)
             if not chunks:
                 chunks = [text]
             translated_parts = []
-            async with aiohttp.ClientSession(trust_env=False) as session:
-                for chunk in chunks:
-                    translated = await CloudTranslateService.translate_chunk(session, chunk, api_key, project_id, location, from_lang, to_lang)
-                    translated_parts.append(translated)
-                    if len(chunks) > 1:
-                        await asyncio.sleep(1)
+            for chunk in chunks:
+                translated = await CloudTranslateService.translate_chunk(client, chunk, project_id, location, from_lang, to_lang)
+                translated_parts.append(translated)
+                if len(chunks) > 1:
+                    await asyncio.sleep(1)
             translated_text = '\n'.join(translated_parts).strip()
             if not translated_text:
                 return {"success": False, "error": "Cloud: 翻译结果为空"}
-            print(f"{prefix} {'工作流翻译完成' if is_auto else '翻译完成'} | 服务:Cloud翻译 | 请求ID:{request_id} | 结果字符数:{len(translated_text)}")
+            print(f"{prefix} {'工作流翻译完成' if is_auto else '翻译完成'} | 服务:Cloud翻译 | 请求ID:{request_id} | 结果字符数:{len(translated_text)} | 位置:{location} | 方法:translateText")
             return {
                 "success": True,
                 "data": {
@@ -100,9 +96,10 @@ class CloudTranslateService:
                 }
             }
         except Exception as e:
-            return {"success": False, "error": str(e)}
+            return {"success": False, "error": format_api_error(e, 'Cloud翻译')}
 
     @staticmethod
     async def batch_translate(texts: list, from_lang: str = 'auto', to_lang: str = 'zh'):
         tasks = [CloudTranslateService.translate(text, from_lang, to_lang) for text in texts]
         return await asyncio.gather(*tasks)
+

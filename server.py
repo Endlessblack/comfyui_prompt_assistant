@@ -196,11 +196,10 @@ async def update_cloud_translate_config(request):
     """更新Cloud翻译配置"""
     try:
         data = await request.json()
-        api_key = data.get('api_key')
         project_id = data.get('project_id')
         location = data.get('location')
 
-        success = config_manager.update_cloud_translate_config(api_key, project_id, location)
+        success = config_manager.update_cloud_translate_config(project_id, location)
 
         if success:
             return web.json_response({'message': '配置已更新'})
