@@ -15,7 +15,7 @@ Cereza69、LAOGOU-666、H、小海、foryoung365、xu...
 
 ## ✨插件介绍
   
-这是一个无需添加节点，即可实现提示词翻译、扩写、预设标签插入、图片反推提示词、历史记录功能等功能的comfyUI插件。   
+这是一个无需添加节点，即可实现提示词翻译、扩写、预设标签插入、图片反推提示词、历史记录等功能的 ComfyUI 插件，支持 Gemini 大模型与 Google Cloud Translate。
 > 📍手动安装请从右侧[Releases](https://github.com/yawiii/comfyui_prompt_assistant/releases)下载最新版本。
 
 
@@ -119,15 +119,19 @@ Cereza69、LAOGOU-666、H、小海、foryoung365、xu...
 解压缩到ComfyUI/custom_nodes目录下
 
 
-2. 重启 ComfyUI
+2. 运行 `pip install -r requirements.txt` 安装依赖
+
+3. 重启 ComfyUI
 
 ## ⚙️ 配置说明
-目前小助手的翻译功能支持百度和智谱两种翻译服务，都是免费的。百度机翻速度快，智谱则是 AI翻译，更加准确。你可以根据自己的需求，进行切换 。而扩写和提示词反推则必须要使用智谱的服务来实现。  
+目前小助手的翻译功能支持百度、谷歌 Cloud Translate 和智谱三种翻译服务。百度机翻速度快，Cloud Translate 提供谷歌官方翻译，智谱则是 AI 翻译，更加准确。你可以根据自己的需求进行切换，而扩写和提示词反推则必须要使用智谱的服务来实现。
 申请教程，可查看作者 B 站视频：<a href="https://space.bilibili.com/520680644"><img src="https://img.shields.io/badge/B%E7%AB%99-%E4%BD%BF%E7%94%A8%E8%AF%B4%E6%98%8E-blue?logo=bilibili&logoColor=2300A5DC&labelColor=%23FFFFFF"></a>
 
-百度翻译申请入口：[通用文本翻译API链接](https://fanyi-api.baidu.com/product/11)   
+百度翻译申请入口：[通用文本翻译API链接](https://fanyi-api.baidu.com/product/11)
 
 ![百度](https://github.com/user-attachments/assets/f3fe2d2d-9507-4bff-887e-003f2e13a19c)
+
+如需使用谷歌 Cloud Translate，请在 Google Cloud Console 启用 Cloud Translation API，并创建 Service Account。下载 JSON 凭证文件，设置环境变量 `GOOGLE_APPLICATION_CREDENTIALS` 指向该文件，并在设置中填入 `TRANSLATE_PROJECT_ID`，可通过 `TRANSLATE_LOCATION` 指定区域（默认 global）。
 
 智谱API申请入口：[智谱API申请](https://www.bigmodel.cn/invite?icode=Wz1tQAT40T9M8vwp%2F1db7nHEaazDlIZGj9HxftzTbt4%3D)
 
