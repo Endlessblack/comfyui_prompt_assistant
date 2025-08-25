@@ -60,9 +60,11 @@ class CloudTranslateService:
             config = config_manager.get_cloud_translate_config()
             project_id = config.get('project_id')
             location = config.get('location') or os.getenv('TRANSLATE_LOCATION') or 'global'
-            credentials_path = os.getenv('GOOGLE_APPLICATION_CREDENTIALS')
+            credentials_path = config.get('credentials_path') or os.getenv('GOOGLE_APPLICATION_CREDENTIALS')
             if not credentials_path or not os.path.exists(credentials_path):
                 return {"success": False, "error": "Cloud: 未检测到有效的GOOGLE_APPLICATION_CREDENTIALS"}
+            if os.getenv('GOOGLE_APPLICATION_CREDENTIALS') != credentials_path:
+                os.environ['GOOGLE_APPLICATION_CREDENTIALS'] = credentials_path
             if not project_id:
                 return {"success": False, "error": "Cloud: 请先配置项目ID"}
 

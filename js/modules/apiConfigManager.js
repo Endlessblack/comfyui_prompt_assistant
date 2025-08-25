@@ -20,7 +20,7 @@ class APIConfigManager {
         this.llmModel = null;
         this.llmApiKey = null;
         this.llmBaseUrl = null;
-        this.cloudApiKey = null;
+        this.cloudCredentialsPath = null;
         this.cloudProjectId = null;
         this.cloudLocation = null;
         this.visionModel = null;
@@ -69,7 +69,7 @@ class APIConfigManager {
 
                         // 处理 Cloud 翻译配置
                         const cloudConfig = {
-                            api_key: controls.cloud.apiKey.value.trim(),
+                            credentials_path: controls.cloud.credentialsPath.value.trim(),
                             project_id: controls.cloud.projectId.value.trim(),
                             location: controls.cloud.location.value.trim(),
                         };
@@ -261,11 +261,11 @@ class APIConfigManager {
         const cloudSection = createFormGroup('Cloud翻译配置', [
             { text: 'Cloud Translate API 申请', url: 'https://cloud.google.com/translate' }
         ]);
-        const cloudApiKey = createInputGroup('', '请输入Cloud Translate API Key');
+        const credentialsPath = createInputGroup('', '请输入Service Account JSON路径');
         const cloudProjectId = createInputGroup('', '请输入Google Cloud项目ID');
         const cloudLocation = createInputGroup('', '例如: global 或 us-central1');
         const cloudKeyGroup = createHorizontalFormGroup([
-            { label: 'API Key', element: cloudApiKey.input }
+            { label: '凭证路径', element: credentialsPath.input }
         ]);
         const cloudInfoGroup = createHorizontalFormGroup([
             { label: '项目ID', element: cloudProjectId.input },
@@ -273,7 +273,7 @@ class APIConfigManager {
         ]);
         cloudSection.appendChild(cloudKeyGroup);
         cloudSection.appendChild(cloudInfoGroup);
-        this.cloudApiKey = cloudApiKey.input;
+        this.cloudCredentialsPath = credentialsPath.input;
         this.cloudProjectId = cloudProjectId.input;
         this.cloudLocation = cloudLocation.input;
         return cloudSection;
@@ -625,8 +625,8 @@ class APIConfigManager {
                 fetch('/prompt_assistant/api/config/vision').then(r => r.json())
             ]);
 
-            if (cloudConfig.api_key) {
-                this.cloudApiKey.value = cloudConfig.api_key;
+            if (cloudConfig.credentials_path) {
+                this.cloudCredentialsPath.value = cloudConfig.credentials_path;
             }
             if (cloudConfig.project_id) {
                 this.cloudProjectId.value = cloudConfig.project_id;
@@ -722,7 +722,7 @@ class APIConfigManager {
             // 将表单控件暴露给保存回调
             container.formControls = {
                 baidu: { appId: this.baiduAppId, secret: this.baiduSecret },
-                cloud: { apiKey: this.cloudApiKey, projectId: this.cloudProjectId, location: this.cloudLocation },
+                cloud: { credentialsPath: this.cloudCredentialsPath, projectId: this.cloudProjectId, location: this.cloudLocation },
                 llm: {
                     provider: this.llmProvider,
                     temperature: this.llmTemperature,

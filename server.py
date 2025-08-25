@@ -198,8 +198,9 @@ async def update_cloud_translate_config(request):
         data = await request.json()
         project_id = data.get('project_id')
         location = data.get('location')
+        credentials_path = data.get('credentials_path')
 
-        success = config_manager.update_cloud_translate_config(project_id, location)
+        success = config_manager.update_cloud_translate_config(project_id, location, credentials_path)
 
         if success:
             return web.json_response({'message': '配置已更新'})

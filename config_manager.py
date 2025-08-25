@@ -24,6 +24,7 @@ class ConfigManager:
                 "secret_key": ""
             },
             "cloud_translate": {
+                "credentials_path": "",
                 "project_id": "",
                 "location": "global"
             },
@@ -403,12 +404,14 @@ class ConfigManager:
 
         return self.save_config(config)
 
-    def update_cloud_translate_config(self, project_id=None, location=None):
+    def update_cloud_translate_config(self, project_id=None, location=None, credentials_path=None):
         """更新Cloud翻译配置"""
         config = self.load_config()
         if "cloud_translate" not in config:
             config["cloud_translate"] = {}
 
+        if credentials_path is not None:
+            config["cloud_translate"]["credentials_path"] = credentials_path
         if project_id is not None:
             config["cloud_translate"]["project_id"] = project_id
         if location is not None:
