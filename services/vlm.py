@@ -296,10 +296,10 @@ class VisionService:
                     "max_tokens": max_tokens,
                     "temperature": temperature,
                     "top_p": top_p,
+                    "response_format": {"type": "text"},
                 }
 
                 if provider == 'gemini':
-                    request_kwargs["response_format"] = {"type": "text"}
                     resp = await client.chat.completions.create(**request_kwargs)
                     try:
                         full_content = VisionService._extract_valid_content(resp, provider_display_name)
@@ -308,7 +308,8 @@ class VisionService:
                     if stream_callback:
                         stream_callback(full_content)
                 else:
-                    resp = await client.chat.completions.create(stream=True, response_format={"type": "text"}, **request_kwargs)
+                    request_kwargs["stream"] = True
+                    resp = await client.chat.completions.create(**request_kwargs)
                     full_content = ""
                     async for chunk in resp:
                         if chunk.choices[0].delta.content:

@@ -220,10 +220,10 @@ class LLMService:
                     "temperature": temperature,
                     "top_p": top_p,
                     "max_tokens": max_tokens,
+                    "response_format": {"type": "text"},
                 }
 
                 if provider == 'gemini':
-                    request_kwargs["response_format"] = {"type": "text"}
                     completion = await client.chat.completions.create(**request_kwargs)
                     try:
                         full_content = LLMService._extract_valid_content(completion, provider_display_name)
@@ -232,7 +232,8 @@ class LLMService:
                     if stream_callback:
                         stream_callback(full_content)
                 else:
-                    stream = await client.chat.completions.create(stream=True, response_format={"type": "text"}, **request_kwargs)
+                    request_kwargs["stream"] = True
+                    stream = await client.chat.completions.create(**request_kwargs)
                     full_content = ""
                     async for chunk in stream:
                         if chunk.choices[0].delta.content:
@@ -359,10 +360,10 @@ class LLMService:
                     "temperature": temperature,
                     "top_p": top_p,
                     "max_tokens": max_tokens,
+                    "response_format": {"type": "text"},
                 }
 
                 if provider == 'gemini':
-                    request_kwargs["response_format"] = {"type": "text"}
                     completion = await client.chat.completions.create(**request_kwargs)
                     try:
                         full_content = LLMService._extract_valid_content(completion, provider_display_name)
@@ -371,7 +372,8 @@ class LLMService:
                     if stream_callback:
                         stream_callback(full_content)
                 else:
-                    stream = await client.chat.completions.create(stream=True, response_format={"type": "text"}, **request_kwargs)
+                    request_kwargs["stream"] = True
+                    stream = await client.chat.completions.create(**request_kwargs)
                     full_content = ""
                     async for chunk in stream:
                         if chunk.choices[0].delta.content:
