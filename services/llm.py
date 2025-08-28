@@ -37,16 +37,10 @@ class LLMService:
                 base_url = cls._provider_base_urls.get(provider)
         
         # 创建简化的httpx客户端，不使用HTTP/2，避免额外依赖
-        if provider == 'gemini':
-            http_client = httpx.AsyncClient(
-                timeout=httpx.Timeout(30.0),
-                params={"key": api_key},
-                headers={"x-goog-api-key": api_key}
-            )
-        else:
-            http_client = httpx.AsyncClient(
-                timeout=httpx.Timeout(15.0)
-            )
+        # Gemini 的 OpenAI 兼容端点推荐使用 Authorization: Bearer，不再追加 ?key 或 x-goog-api-key
+        http_client = httpx.AsyncClient(
+            timeout=httpx.Timeout(30.0 if provider == 'gemini' else 15.0)
+        )
 
         kwargs = {
             "api_key": api_key,
@@ -279,86 +273,117 @@ class LLMService:
                 if provider != 'gemini':
                     request_kwargs["response_format"] = {"type": "text"}
 
-                request_kwargs["stream"] = True
-                stream = await client.chat.completions.create(**request_kwargs)
-                full_content = ""
-                finish = None
-                first_logged = False
-                async for chunk in stream:
-                    if provider == 'gemini':
-                        print(f"{PREFIX} [Gemini|stream] raw_chunk: {LLMService._redact_api_key(chunk.model_dump_json())}")
-                    choice0 = chunk.choices[0]
-                    delta = getattr(choice0, "delta", None)
-                    finish = getattr(choice0, "finish_reason", finish)
-                    part = getattr(delta, "content", None) if delta else None
-                    piece = ""
-                    if isinstance(part, str):
-                        piece = part
-                    elif isinstance(part, list):
-                        buf: List[str] = []
-                        for p in part:
-                            if isinstance(p, dict):
-                                t = p.get("text") or p.get("content") or ""
-                                if isinstance(t, str) and t:
-                                    buf.append(t)
-                        piece = "".join(buf)
-                    if piece:
-                        if not first_logged and provider == 'gemini':
-                            print(f"{PREFIX} [Gemini|stream] first-chunk len={len(piece)}")
-                            first_logged = True
-                        full_content += piece
-                        if stream_callback:
-                            stream_callback(piece)
-                if provider == 'gemini':
-                    print(f"{PREFIX} [Gemini|stream] finish_reason={finish} total_len={len(full_content)}")
-                    if not full_content:
-                        req2 = dict(request_kwargs)
-                        req2["stream"] = False
-                        try:
-                            full_content, resp2 = await LLMService._extract_with_retry(client, req2, provider, provider_display_name)
-                        except ValueError:
-                            full_content = ""
-                            resp2 = None
-                        finish = getattr(resp2.choices[0], "finish_reason", finish) if resp2 else finish
-                        print(f"{PREFIX} [Gemini|stream] fallback non-stream used len={len(full_content)}")
-                    if finish == "length" or not full_content:
-                        for k in range(3):
-                            tail_or_continued = full_content[-1200:] if full_content else "(continued)"
-                            cont_messages = request_kwargs["messages"] + [
-                                {"role": "assistant", "content": tail_or_continued},
-                                {"role": "user", "content": "Continue."}
-                            ]
-                            tmp_max_tokens = min(int(max_tokens * 1.5) if max_tokens else 1500, 4096)
-                            req3 = {
-                                "model": model,
-                                "messages": cont_messages,
-                                "temperature": temperature,
-                                "top_p": top_p,
-                                "max_tokens": tmp_max_tokens,
-                                "stream": False,
-                                "tool_choice": "none",
-                            }
-                            if provider != 'gemini':
-                                req3["response_format"] = {"type": "text"}
-                            try:
-                                addition, resp3 = await LLMService._extract_with_retry(client, req3, provider, provider_display_name)
-                            except ValueError:
-                                addition = ""
-                                resp3 = None
-                            finish = getattr(resp3.choices[0], "finish_reason", finish) if resp3 else finish
-                            if addition:
-                                full_content += addition
-                            print(f"{PREFIX} auto-continue#{k+1} finish={finish} len={len(full_content)}")
-                            if finish != "length" or not addition:
-                                break
-                    if finish in {"content_filter", "safety"}:
-                        print(f"{PREFIX} finish_reason={finish} total_len={len(full_content)}")
-                        # 允许返回空内容
-                    elif not full_content.strip():
-                        return {"success": False, "error": f"{provider_display_name}返回空结果"}
-                else:
+                # Gemini 在 OpenAI 兼容流式模式下经常出现空增量，优先使用非流式，保留回调时再尝试流式
+                if provider == 'gemini' and not stream_callback:
+                    non_stream_kwargs = dict(request_kwargs)
+                    non_stream_kwargs["stream"] = False
+                    full_content, resp2 = await LLMService._extract_with_retry(
+                        client, non_stream_kwargs, provider, provider_display_name
+                    )
+                    finish = getattr(resp2.choices[0], "finish_reason", None) if resp2 else None
+                    # 如果因为长度截断，追加一次续写请求（避免多次重试）
+                    if finish == "length" and full_content:
+                        tail_or_continued = full_content[-1200:]
+                        cont_messages = request_kwargs["messages"] + [
+                            {"role": "assistant", "content": tail_or_continued},
+                            {"role": "user", "content": "Continue."}
+                        ]
+                        tmp_max_tokens = min(int(max_tokens * 1.5) if max_tokens else 1500, 4096)
+                        req3 = {
+                            "model": model,
+                            "messages": cont_messages,
+                            "temperature": temperature,
+                            "top_p": top_p,
+                            "max_tokens": tmp_max_tokens,
+                            "stream": False,
+                            "tool_choice": "none",
+                        }
+                        addition, resp3 = await LLMService._extract_with_retry(client, req3, provider, provider_display_name)
+                        if addition:
+                            full_content += addition
                     if not full_content.strip():
                         return {"success": False, "error": f"{provider_display_name}返回空结果"}
+                else:
+                    request_kwargs["stream"] = True
+                    stream = await client.chat.completions.create(**request_kwargs)
+                    full_content = ""
+                    finish = None
+                    first_logged = False
+                    async for chunk in stream:
+                        if provider == 'gemini':
+                            print(f"{PREFIX} [Gemini|stream] raw_chunk: {LLMService._redact_api_key(chunk.model_dump_json())}")
+                        choice0 = chunk.choices[0]
+                        delta = getattr(choice0, "delta", None)
+                        finish = getattr(choice0, "finish_reason", finish)
+                        part = getattr(delta, "content", None) if delta else None
+                        piece = ""
+                        if isinstance(part, str):
+                            piece = part
+                        elif isinstance(part, list):
+                            buf: List[str] = []
+                            for p in part:
+                                if isinstance(p, dict):
+                                    t = p.get("text") or p.get("content") or ""
+                                    if isinstance(t, str) and t:
+                                        buf.append(t)
+                            piece = "".join(buf)
+                        if piece:
+                            if not first_logged and provider == 'gemini':
+                                print(f"{PREFIX} [Gemini|stream] first-chunk len={len(piece)}")
+                                first_logged = True
+                            full_content += piece
+                            if stream_callback:
+                                stream_callback(piece)
+                    if provider == 'gemini':
+                        print(f"{PREFIX} [Gemini|stream] finish_reason={finish} total_len={len(full_content)}")
+                        if not full_content:
+                            req2 = dict(request_kwargs)
+                            req2["stream"] = False
+                            try:
+                                full_content, resp2 = await LLMService._extract_with_retry(client, req2, provider, provider_display_name)
+                            except ValueError:
+                                full_content = ""
+                                resp2 = None
+                            finish = getattr(resp2.choices[0], "finish_reason", finish) if resp2 else finish
+                            print(f"{PREFIX} [Gemini|stream] fallback non-stream used len={len(full_content)}")
+                        if finish == "length" or not full_content:
+                            # 将自动续写次数限制为 1，避免多次请求
+                            for k in range(1):
+                                tail_or_continued = full_content[-1200:] if full_content else "(continued)"
+                                cont_messages = request_kwargs["messages"] + [
+                                    {"role": "assistant", "content": tail_or_continued},
+                                    {"role": "user", "content": "Continue."}
+                                ]
+                                tmp_max_tokens = min(int(max_tokens * 1.5) if max_tokens else 1500, 4096)
+                                req3 = {
+                                    "model": model,
+                                    "messages": cont_messages,
+                                    "temperature": temperature,
+                                    "top_p": top_p,
+                                    "max_tokens": tmp_max_tokens,
+                                    "stream": False,
+                                    "tool_choice": "none",
+                                }
+                                if provider != 'gemini':
+                                    req3["response_format"] = {"type": "text"}
+                                try:
+                                    addition, resp3 = await LLMService._extract_with_retry(client, req3, provider, provider_display_name)
+                                except ValueError:
+                                    addition = ""
+                                    resp3 = None
+                                finish = getattr(resp3.choices[0], "finish_reason", finish) if resp3 else finish
+                                if addition:
+                                    full_content += addition
+                                print(f"{PREFIX} auto-continue#{k+1} finish={finish} len={len(full_content)}")
+                                if finish != "length" or not addition:
+                                    break
+                        if finish in {"content_filter", "safety"}:
+                            print(f"{PREFIX} finish_reason={finish} total_len={len(full_content)}")
+                        elif not full_content.strip():
+                            return {"success": False, "error": f"{provider_display_name}返回空结果"}
+                    else:
+                        if not full_content.strip():
+                            return {"success": False, "error": f"{provider_display_name}返回空结果"}
 
                 # 输出结构化成功日志
                 print(f"{PREFIX} LLM扩写成功 | 服务:{provider_display_name} | 请求ID:{request_id} | 结果字符数:{len(full_content)}")
