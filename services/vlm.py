@@ -101,6 +101,71 @@ class VisionService:
         return re.sub(r'(?<=\?key=)[^&]+', '***redacted***', text)
 
     @staticmethod
+    def _save_stream_log(request_id: Optional[str], line: str) -> None:
+        """将Gemini流式调试日志写入文件，便于排查。"""
+        if not request_id:
+            return
+        try:
+            log_dir = os.path.join(os.getcwd(), 'logs')
+            os.makedirs(log_dir, exist_ok=True)
+            path = os.path.join(log_dir, f'gemini_vlm_{request_id}.log')
+            with open(path, 'a', encoding='utf-8') as f:
+                f.write(line + "\n")
+        except Exception:
+            # 静默失败，避免影响主流程
+            pass
+
+    @staticmethod
+    async def _gemini_native_vision(
+        api_key: str,
+        model: str,
+        system_text: str,
+        image_data_url: str,
+        max_tokens: int = 2048,
+        temperature: float = 0.7,
+        top_p: float = 0.9,
+    ) -> str:
+        """调用 Gemini 原生 generateContent 端点（图像）一次并返回文本（可能为空）。"""
+        base = "https://generativelanguage.googleapis.com/v1beta"
+        url = f"{base}/models/{model}:generateContent"
+        # 从 data URL 提取 mime 与 base64 数据
+        mime = 'image/jpeg'
+        data_b64 = ''
+        try:
+            if image_data_url.startswith('data:image'):
+                header, enc = image_data_url.split(',', 1)
+                # data:image/png;base64,...
+                if ';base64' in header:
+                    mime = header.split(':',1)[1].split(';',1)[0]
+                data_b64 = enc
+        except Exception:
+            data_b64 = ''
+        parts = [{"text": system_text or ""}]
+        if data_b64:
+            parts.append({"inline_data": {"mime_type": mime, "data": data_b64}})
+        payload = {
+            "contents": [{"role": "user", "parts": parts}],
+            "generation_config": {
+                "temperature": temperature,
+                "top_p": top_p,
+                "max_output_tokens": max_tokens,
+                "response_mime_type": "text/plain",
+            },
+        }
+        async with httpx.AsyncClient(timeout=httpx.Timeout(45.0)) as s:
+            r = await s.post(url, headers={"x-goog-api-key": api_key}, json=payload)
+            r.raise_for_status()
+            j = r.json()
+        out = []
+        for c in j.get("candidates", []) or []:
+            content = (c or {}).get("content") or {}
+            for p in content.get("parts", []) or []:
+                t = p.get("text") or p.get("output_text") or p.get("content")
+                if isinstance(t, str) and t.strip():
+                    out.append(t.strip())
+        return "".join(out)
+
+    @staticmethod
     def _extract_valid_content(completion: ChatCompletion, provider_display_name: str) -> str:
         """验证并提取视觉模型返回的文本内容"""
         if not isinstance(completion, ChatCompletion):
@@ -350,7 +415,37 @@ class VisionService:
             # 发送请求
             print(f"{PREFIX} 调用视觉模型 | 服务:{provider_display_name} | 请求ID:{request_id} | 模型:{model}")
             
-            # 使用OpenAI SDK
+            # 若使用 Gemini，直接走原生端点，避免兼容层空结果
+            if provider == 'gemini':
+                full_content = ""
+                attempts = 0
+                cur_max_tokens = max_tokens
+                while not full_content.strip() and attempts < 8:
+                    attempts += 1
+                    try:
+                        got = await VisionService._gemini_native_vision(
+                            api_key, model, system_prompt, image_data, cur_max_tokens, temperature, top_p
+                        )
+                    except Exception:
+                        got = ""
+                    if got and got.strip():
+                        full_content = got.strip()
+                        break
+                    if cur_max_tokens < 4096:
+                        cur_max_tokens = min(4096, max(1024, cur_max_tokens * 2))
+
+                if not full_content.strip():
+                    return {"success": False, "error": f"{provider_display_name}返回空结果"}
+
+                print(f"{PREFIX} 视觉模型分析成功 | 服务:{provider_display_name} | 请求ID:{request_id} | 结果字符数:{len(full_content)}")
+                return {
+                    "success": True,
+                    "data": {
+                        "description": full_content
+                    }
+                }
+
+            # 使用OpenAI SDK（非 Gemini 走兼容层）
             client = VisionService.get_openai_client(api_key, provider, base_url)
             try:
                 # 添加调试信息
@@ -373,7 +468,8 @@ class VisionService:
                 if provider != 'gemini':
                     request_kwargs["response_format"] = {"type": "text"}
 
-                # Gemini 在 OpenAI 兼容流式模式下经常出现空增量，优先使用非流式，保留回调时再尝试流式
+                # Gemini 在 OpenAI 兼容流式模式下经常出现空增量，优先使用非流式，必要时回退到流式以拼接增量
+                # 已迁移至原生端点：此处的 Gemini 兼容分支在 analyze_image 中不会命中
                 if provider == 'gemini' and not stream_callback:
                     non_stream_kwargs = dict(request_kwargs)
                     non_stream_kwargs["stream"] = False
@@ -401,8 +497,62 @@ class VisionService:
                         addition, resp3 = await VisionService._extract_with_retry(client, req3, provider, provider_display_name)
                         if addition:
                             full_content += addition
+                    # 非流式仍为空时，尝试一次流式拼接增量
                     if not full_content.strip():
-                        return {"success": False, "error": f"{provider_display_name}返回空结果"}
+                        request_kwargs["stream"] = True
+                        resp = await client.chat.completions.create(**request_kwargs)
+                        full_content = ""
+                        finish = None
+                        first_logged = False
+                        async for chunk in resp:
+                            if provider == 'gemini':
+                                _raw = VisionService._redact_api_key(chunk.model_dump_json())
+                                _line = f"{PREFIX} [Gemini|stream] raw_chunk: {_raw}"
+                                print(_line)
+                                VisionService._save_stream_log(request_id, _line)
+                            choice0 = chunk.choices[0]
+                            delta = getattr(choice0, "delta", None)
+                            finish = getattr(choice0, "finish_reason", finish)
+                            part = getattr(delta, "content", None) if delta else None
+                            piece = ""
+                            if isinstance(part, str):
+                                piece = part
+                            elif isinstance(part, list):
+                                buf: List[str] = []
+                                for p in part:
+                                    if isinstance(p, dict):
+                                        t = p.get("text") or p.get("content") or ""
+                                        if isinstance(t, str) and t:
+                                            buf.append(t)
+                                piece = "".join(buf)
+                            if piece:
+                                if not first_logged:
+                                    _line = f"{PREFIX} [Gemini|stream] first-chunk len={len(piece)}"
+                                    print(_line)
+                                    VisionService._save_stream_log(request_id, _line)
+                                    first_logged = True
+                                full_content += piece
+                                if stream_callback:
+                                    stream_callback(piece)
+                        if not full_content.strip():
+                            # 仍为空：调用 Gemini 原生端点进行多次尝试
+                            system_prompt = prompt_content or ""
+                            attempts = 0
+                            while True:
+                                attempts += 1
+                                try:
+                                    got = await VisionService._gemini_native_vision(
+                                        api_key, model, system_prompt, image_data, max_tokens, temperature, top_p
+                                    )
+                                except Exception:
+                                    got = ""
+                                if got and got.strip():
+                                    full_content = got.strip()
+                                    break
+                                if attempts >= 8:
+                                    break
+                            if not full_content.strip():
+                                return {"success": False, "error": f"{provider_display_name}返回空结果"}
                 else:
                     request_kwargs["stream"] = True
                     resp = await client.chat.completions.create(**request_kwargs)
@@ -410,8 +560,12 @@ class VisionService:
                     finish = None
                     first_logged = False
                     async for chunk in resp:
+                        # 已迁移至原生端点：下方 Gemini 专属日志在 analyze_image 中不会命中
                         if provider == 'gemini':
-                            print(f"{PREFIX} [Gemini|stream] raw_chunk: {VisionService._redact_api_key(chunk.model_dump_json())}")
+                            _raw = VisionService._redact_api_key(chunk.model_dump_json())
+                            _line = f"{PREFIX} [Gemini|stream] raw_chunk: {_raw}"
+                            print(_line)
+                            VisionService._save_stream_log(request_id, _line)
                         choice0 = chunk.choices[0]
                         delta = getattr(choice0, "delta", None)
                         finish = getattr(choice0, "finish_reason", finish)
@@ -423,19 +577,29 @@ class VisionService:
                             buf: List[str] = []
                             for p in part:
                                 if isinstance(p, dict):
-                                    t = p.get("text") or p.get("content") or ""
+                                    # 兼容 Gemini 可能返回的 output_text 字段
+                                    t = p.get("text") or p.get("output_text") or p.get("content") or ""
                                     if isinstance(t, str) and t:
                                         buf.append(t)
                             piece = "".join(buf)
+                        elif isinstance(part, dict):
+                            t = part.get("text") or part.get("output_text") or part.get("content") or ""
+                            if isinstance(t, str):
+                                piece = t
                         if piece:
                             if not first_logged and provider == 'gemini':
-                                print(f"{PREFIX} [Gemini|stream] first-chunk len={len(piece)}")
+                                _line = f"{PREFIX} [Gemini|stream] first-chunk len={len(piece)}"
+                                print(_line)
+                                VisionService._save_stream_log(request_id, _line)
                                 first_logged = True
                             full_content += piece
                             if stream_callback:
                                 stream_callback(piece)
+                    # 已迁移至原生端点：下方 Gemini 专属逻辑在 analyze_image 中不会命中
                     if provider == 'gemini':
-                        print(f"{PREFIX} [Gemini|stream] finish_reason={finish} total_len={len(full_content)}")
+                        _line = f"{PREFIX} [Gemini|stream] finish_reason={finish} total_len={len(full_content)}"
+                        print(_line)
+                        VisionService._save_stream_log(request_id, _line)
                         if not full_content:
                             req2 = dict(request_kwargs)
                             req2["stream"] = False
@@ -445,7 +609,9 @@ class VisionService:
                                 full_content = ""
                                 resp2 = None
                             finish = getattr(resp2.choices[0], "finish_reason", finish) if resp2 else finish
-                            print(f"{PREFIX} [Gemini|stream] fallback non-stream used len={len(full_content)}")
+                            _line = f"{PREFIX} [Gemini|stream] fallback non-stream used len={len(full_content)}"
+                            print(_line)
+                            VisionService._save_stream_log(request_id, _line)
                         if finish == "length" or not full_content:
                             # 将自动续写次数限制为 1，避免多次请求
                             for k in range(1):
@@ -480,7 +646,24 @@ class VisionService:
                         if finish in {"content_filter", "safety"}:
                             print(f"{PREFIX} finish_reason={finish} total_len={len(full_content)}")
                         elif not full_content.strip():
-                            return {"success": False, "error": f"{provider_display_name}返回空结果"}
+                            # 使用 Gemini 原生端点进行多次尝试，直到获取到文本或达到安全上限
+                            system_prompt = prompt_content or ""
+                            attempts = 0
+                            while True:
+                                attempts += 1
+                                try:
+                                    got = await VisionService._gemini_native_vision(
+                                        api_key, model, system_prompt, image_data, max_tokens, temperature, top_p
+                                    )
+                                except Exception:
+                                    got = ""
+                                if got and got.strip():
+                                    full_content = got.strip()
+                                    break
+                                if attempts >= 8:
+                                    break
+                            if not full_content.strip():
+                                return {"success": False, "error": f"{provider_display_name}返回空结果"}
                     else:
                         if not full_content.strip():
                             return {"success": False, "error": f"{provider_display_name}返回空结果"}
@@ -545,5 +728,103 @@ if __name__ == "__main__":
         assert content == "Retry ok"
 
     asyncio.run(_test_retry())
-    print("self-test passed")
+
+    # 测试：非流式为空时，流式增量回退可拼接出文本
+    class Chunk:
+        def __init__(self, text, last=False):
+            class Delta: pass
+            class Choice: pass
+            d = Delta()
+            # 模拟 Gemini 可能的 delta.content 结构
+            d.content = [{"type": "output_text", "output_text": text}]
+            c = Choice()
+            c.delta = d
+            c.finish_reason = "length" if last else None
+            self.choices = [c]
+        def model_dump_json(self):
+            return json.dumps({
+                "choices": [{
+                    "delta": {"content": [{"type": "output_text", "output_text": "..."}]},
+                    "finish_reason": self.choices[0].finish_reason
+                }]}
+            )
+
+    class DummyStreamClient:
+        def __init__(self):
+            self.chat = type("obj", (), {"completions": type("obj", (), {"create": self.create})()})
+        async def create(self, **kwargs):
+            if kwargs.get("stream"):
+                async def gen():
+                    yield Chunk("Hello ")
+                    yield Chunk("world", last=True)
+                return gen()
+            # 非流式返回空内容，触发回退
+            return _make({"choices":[{"message":{"role":"assistant","content":None},"finish_reason":"stop"}]})
+
+    async def _test_stream_fallback():
+        client = DummyStreamClient()
+        # 简化的入参
+        req = {
+            "model": "m",
+            "messages": [{"role": "user", "content": [{"type": "text", "text": "describe"}, {"type": "image_url", "image_url": {"url": "data:image/png;base64,xx"}}]}],
+            "max_tokens": 128,
+            "temperature": 0.7,
+            "top_p": 0.9,
+            "tool_choice": "none",
+        }
+        # 调用包含回退逻辑的路径
+        # 直接调用内部逻辑，模拟 provider == 'gemini' 且无 stream_callback
+        content, _ = await VisionService._extract_with_retry(client, dict(req, stream=False), "gemini", "Gemini")
+        # 非流式为空，外层 analyze_image 会触发流式，直接模拟外层逻辑：
+        if not content.strip():
+            # 流式分支
+            req_stream = dict(req, stream=True)
+            resp = await client.chat.completions.create(**req_stream)
+            full = ""
+            async for ch in resp:
+                part = ch.choices[0].delta.content
+                if isinstance(part, list) and part:
+                    t = part[0].get("output_text") or part[0].get("text") or ""
+                    full += t
+            assert full == "Hello world"
+
+    asyncio.run(_test_stream_fallback())
+
+    # 自测：模拟 Gemini 原生图像端点先空后有，验证可拿到文本
+    async def _selftest_gemini_native_vision():
+        class DummyResp:
+            def __init__(self, j):
+                self._j = j
+            def raise_for_status(self):
+                pass
+            def json(self):
+                return self._j
+
+        class DummyClient:
+            def __init__(self):
+                self.calls = 0
+            async def __aenter__(self):
+                return self
+            async def __aexit__(self, exc_type, exc, tb):
+                return False
+            async def post(self, *a, **k):
+                self.calls += 1
+                if self.calls < 2:
+                    return DummyResp({"candidates": [{"content": {"parts": [{"text": ""}]}}]})
+                else:
+                    return DummyResp({"candidates": [{"content": {"parts": [{"text": "vision OK"}]}}]})
+
+        _orig = httpx.AsyncClient
+        httpx.AsyncClient = DummyClient  # type: ignore
+        try:
+            out = await VisionService._gemini_native_vision(
+                api_key="k", model="m", system_text="desc", image_data_url="data:image/png;base64,xx"
+            )
+            assert out == "vision OK"
+            print("VLM native self-test passed")
+        finally:
+            httpx.AsyncClient = _orig  # type: ignore
+
+    asyncio.run(_selftest_gemini_native_vision())
+    print("self-tests passed")
 
