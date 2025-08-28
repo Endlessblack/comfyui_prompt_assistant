@@ -126,12 +126,29 @@ class VisionService:
             text = "".join(buf).strip()
 
         def _search(obj: Any) -> Optional[str]:
+            """在兼容响应中尽量定位文本，但避免误把 id、model 等字符串当作正文。"""
             if isinstance(obj, dict):
+                # 优先常见文本字段
                 for key in ["text", "output_text", "value"]:
                     val = obj.get(key)
                     if isinstance(val, str) and val.strip():
                         return val.strip()
-                for v in obj.values():
+                # 兼容 content:list 的内层
+                val = obj.get("content")
+                if isinstance(val, list):
+                    buf: List[str] = []
+                    for p in val:
+                        if isinstance(p, dict):
+                            t = p.get("text") or p.get("content")
+                            if isinstance(t, str) and t.strip():
+                                buf.append(t.strip())
+                    if buf:
+                        return "".join(buf)
+                # 继续深搜其它字段
+                for k, v in obj.items():
+                    # 跳过明显不是正文的字段，避免误判
+                    if k in {"id", "model", "object", "system_fingerprint"}:
+                        continue
                     found = _search(v)
                     if found:
                         return found
@@ -140,8 +157,7 @@ class VisionService:
                     found = _search(item)
                     if found:
                         return found
-            elif isinstance(obj, str) and obj.strip():
-                return obj.strip()
+            # 不再返回任意字符串，避免将 id 等误当正文
             return None
 
         if not text:
