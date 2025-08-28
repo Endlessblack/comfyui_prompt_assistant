@@ -50,6 +50,15 @@ class VisionService:
             "max_retries": 2  # 设置最大重试次数
         }
         if base_url:
+            # 规范化 Gemini 的 OpenAI 兼容路径，确保带有 /openai 前缀
+            if provider == 'gemini':
+                # 去掉错误附带的结尾 /chat/completions，避免重复
+                if base_url.endswith('/chat/completions'):
+                    base_url = base_url[:-len('/chat/completions')]
+                # 如果是官方域名但未携带 /openai，则追加一次
+                if 'generativelanguage.googleapis.com' in base_url and '/openai' not in base_url:
+                    base_url = base_url.rstrip('/') + '/openai'
+
             # 确保base_url末尾没有斜杠
             base_url = base_url.rstrip('/')
             kwargs["base_url"] = base_url
